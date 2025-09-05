@@ -106,6 +106,9 @@ void saveDeviceConfig()
     preferences.putUInt("config_lid", config_lid);
     preferences.putUInt("config_id", config_id);
     preferences.putUInt("nod", ::nod);
+    preferences.putString("mesh_ssid", mesh_ssid);
+    preferences.putString("mesh_password", mesh_password);
+    preferences.putUInt("mesh_channel", mesh_channel);
     preferences.end();
 }
 
@@ -122,6 +125,9 @@ void loadLicenseData()
     runtime = preferences.getULong("runtime", 0);
     globalLicense.nod = preferences.getUInt("nod", mesh.getNodeList().size() + 1);
     ::nod = globalLicense.nod;
+    mesh_ssid = preferences.getString("mesh_ssid", mesh_ssid);
+    mesh_password = preferences.getString("mesh_password", mesh_password);
+    mesh_channel = preferences.getUInt("mesh_channel", mesh_channel);
     preferences.end();
     Serial.println("✅ Đã đọc và cập nhật dữ liệu license từ NVS:");
     Serial.print("LID: ");
@@ -307,6 +313,14 @@ void xu_ly_data(uint32_t from, int id_src, int id_des, uint32_t mac_src, uint32_
         JsonObject licData = data.as<JsonObject>();
         int new_lid = licData["lid"].as<int>();
         int new_id = licData["id"].as<int>();
+
+        if (data.containsKey("mesh_ssid"))
+            mesh_ssid = data["mesh_ssid"].as<String>();
+        if (data.containsKey("mesh_password"))
+            mesh_password = data["mesh_password"].as<String>();
+        if (data.containsKey("mesh_channel"))
+            mesh_channel = data["mesh_channel"].as<uint8_t>();
+
         uint32_t nod = licData["nod"].as<uint32_t>();
         StaticJsonDocument<256> respDoc;
         if (new_lid > 0 && new_id > 0)
@@ -321,6 +335,11 @@ void xu_ly_data(uint32_t from, int id_src, int id_des, uint32_t mac_src, uint32_
             preferences.putUInt("lid", globalLicense.lid);
             preferences.putUInt("id", globalLicense.id);
             preferences.putUInt("nod", globalLicense.nod);
+
+            preferences.putString("mesh_ssid", mesh_ssid);
+            preferences.putString("mesh_password", mesh_password);
+            preferences.putUInt("mesh_channel", mesh_channel);
+
             preferences.end();
             led.setState(FLASH_TWICE);
             Serial.println("✅ Cấu hình thành công: LID = " + String(new_lid) + ", ID = " + String(new_id) + ", NOD = " + String(nod));
@@ -328,6 +347,8 @@ void xu_ly_data(uint32_t from, int id_src, int id_des, uint32_t mac_src, uint32_
             respDoc["lid"] = globalLicense.lid;
             respDoc["id"] = globalLicense.id;
             respDoc["nod"] = globalLicense.nod;
+            respDoc["mesh_ssid"] = mesh_ssid;
+            respDoc["mesh_channel"] = mesh_channel;
         }
         else
         {

@@ -22,7 +22,7 @@ PayloadStruct message;
 
 // Biến lưu cấu hình
 int config_lid = 114;
-int config_id = 2005; // ID của HUB66S
+int config_id = 2004; // ID của HUB66S
 int id_des = 1001;    // ID của LIC66S
 String device_id = "HUB66S_001";
 
@@ -34,11 +34,17 @@ uint8_t expired = 0; // Biến lưu trạng thái hết hạn  //int chuyển sa
 uint32_t now;
 time_t start_time = 0;
 const uint32_t duration = 60;  //const uint32_t giá trị cố định sau khi gán lần đầu
-uint32_t lastSendTime = 0;
+uint32_t lastSendTime = 0; //Thời điểm gửi gói tin gần nhất
+uint32_t lastRuntimeUpdate = 0; // Thời điểm cập nhật runtime gần nhất
 uint32_t lastPacketNodeId = 0; // Chỉ ở một chỗ duy nhất!
 
 uint32_t runtime = 0;
 uint32_t nod = 0; // số lượng thiết bị trong mesh, sẽ được cập nhật ở setup()
+
+// Thông số mạng mesh có thể cấu hình
+String mesh_ssid = MESH_SSID;
+String mesh_password = MESH_PASSWORD;
+uint8_t mesh_channel = MESH_CHANNEL;
 
 bool dang_gui = false; // cờ đang gửi
 
@@ -123,9 +129,9 @@ void loop()
 
   // Cập nhật license, remain, expired, NVS mỗi 1 phút
   uint32_t nowMillis = millis();
-  if (nowMillis - lastSendTime > 60000) 
+  if (nowMillis - lastRuntimeUpdate >= 60000) 
   {
-    lastSendTime = nowMillis;
+    lastRuntimeUpdate = nowMillis;
     now = time(nullptr);
 
     if (globalLicense.lid != 0 && globalLicense.duration > 0)

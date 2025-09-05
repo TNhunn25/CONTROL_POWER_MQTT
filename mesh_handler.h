@@ -8,10 +8,15 @@
 #include "led_status.h"
 
 // Thông số mạng mesh
-#define MESH_SSID "Hub66sMesh"
-#define MESH_PASSWORD "mesh_pass_456"
+// #define MESH_SSID "Hub66sMesh"
+// #define MESH_PASSWORD "mesh_pass_456"
 #define MESH_PORT 5555
-#define MESH_CHANNEL 6
+// #define MESH_CHANNEL 6
+
+// Các tham số mạng mesh có thể cấu hình động
+extern String mesh_ssid;
+extern String mesh_password;
+extern uint8_t mesh_channel; // Kênh WiFi cho mesh trùng với sender
 
 extern painlessMesh mesh;
 extern Scheduler userScheduler;
@@ -116,12 +121,13 @@ inline void initMesh()
     // Tắt chế độ tiết kiệm điện để root không sleep
     WiFi.setSleep(false);
     mesh.setDebugMsgTypes(ERROR | STARTUP);
-    mesh.init(MESH_SSID, MESH_PASSWORD, &userScheduler, MESH_PORT, WIFI_STA, MESH_CHANNEL);
+    // mesh.init(MESH_SSID, MESH_PASSWORD, &userScheduler, MESH_PORT, WIFI_STA, MESH_CHANNEL);
+    mesh.init(mesh_ssid.c_str(), mesh_password.c_str(), MESH_PORT, WIFI_AP_STA, mesh_channel,1);
+
+
     // mesh.setRoot(true);          // ✅ đánh dấu node này là ROOT
     // Cố định root để hạn chế việc node liên tục scan và nhảy mạng
-    mesh.setContainsRoot(true);
-    // WiFi.softAP(MESH_SSID, MESH_PASSWORD, MESH_CHANNEL, true);
-
+    mesh.setContainsRoot(true); //Dòng này chỉ node dùng 
     mesh.onReceive(&meshReceivedCallback);
     Serial.println("✅ mesh_handler: painlessMesh initialized");
 }

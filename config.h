@@ -24,6 +24,11 @@
 // Kích thước buffer cho JSON
 #define BUFFER_SIZE 250
 
+//Thông số mạng mesh mặc định
+#define MESH_SSID "Hub66sMesh"
+#define MESH_PASSWORD "mesh_pass_456"
+#define MESH_CHANNEL 6
+
 // Khóa bí mật
 #define private_key "khoabi_mat_123"
 
@@ -90,6 +95,11 @@ extern uint8_t expired;
 extern uint32_t now;
 extern uint32_t lastSendTime;
 extern String device_id;
-extern uint32_t nod; // Số lượng thiết bị, mặc định là 10
+extern uint32_t nod; // Số lượng thiết bị
+
+// Thông số mạng mesh có thể cấu hình
+extern String mesh_ssid;
+extern String mesh_password;
+extern uint8_t mesh_channel;
 
 #endif // CONFIG_H
