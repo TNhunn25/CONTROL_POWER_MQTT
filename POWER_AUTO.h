@@ -9,6 +9,8 @@
 // ===================== Cấu hình =====================
 #define KEY "control_power" // Key MD5
 
+extern const char data_MQTT[100];
+
 inline float powerJsonRoundToDecimals(float value, uint8_t decimals)
 {
     float factor = 1.0f;
@@ -149,6 +151,9 @@ inline bool powerJsonBuildAutoPayload(const char *deviceId, uint8_t outputNumber
 
     String signature = signState(deviceId, static_cast<int>(outputNumber), mode, onState, voltageString, currentString, energyString,
                                  seq, static_cast<uint32_t>(timestamp));
+
+    // data_MQTT = signature;    
+    sprintf(data_MQTT, "%s",signature);                         
     if (signature.length() == 0)
     {
         return false;

@@ -17,30 +17,30 @@ int test = 1;
 ////////////////////////////////Ethernet
 #include <Ethernet.h>
 #include <PubSubClient.h>
-#include "POWER_JSON.h"
+#include "POWER_AUTO.h"
 EthernetClient ethClient;
-PubSubClient mqttClient;
+PubSubClient mqttClient(ethClient);
 
-constexpr char DEVICE_ID[]= "POWER_CTRL_01";
+constexpr char DEVICE_ID[] = "POWER_CTRL_01";
 unsigned long timer_ketnoimang = 0;
 unsigned long timer_ketnoiserver = 0;
 
 uint8_t mac[6] = {0x00, 0x01, 0x02, 0x04, 0x00, 0x00}; //******// phan biet lay dia chi ip
 String ip = "";
 
-byte ipaddress[] = {0, 0, 0, 0}; //{192,168,10,254};                      //ip mang dang dung
-byte gateway[] = {0, 0, 0, 0};   //{192,168,10,1};                   //truy cập internet qua router
-byte subnet[] = {0, 0, 0, 0};    //{255,255,255,0};
-
+IPAddress ipaddress(192, 168, 80, 141); //{192,168,10,254};                      //ip mang dang dung
+IPAddress gateway(192, 168, 80, 254);   //{192,168,10,1};                   //truy cập internet qua router
+IPAddress subnet(255, 255, 255, 0);     //{255,255,255,0};
+IPAddress dns(8, 8, 8, 8);
 int ketnoimang = 0;
 /////////////////////////////MQTT
-String NameString = ""; //"POWER";
+String NameString = "POWER"; //"POWER";
 
 int ID = 0;
 int IDtam = 0;
 String IDString = "";
 
-char *CLIENT_ID = ""; // SERVER phan biet board
+char *CLIENT_ID = "DEVICE1"; // SERVER phan biet board
 String CLIENT_IDString = "";
 char CLIENT_IDChar[50];
 
@@ -96,17 +96,17 @@ char AUTOChar[50];
 
 ///////////////////////////////////////////////////////////////SERVER
 // #define mqtt_server "192.168.11.48" // Thay bằng thông tin của bạn
-char *mqtt_server = ""; //"mqtt://mqtt.dev-altamedia.com";//"192.168.11.48";
+char *mqtt_server = "mqtt.dev-altamedia.com"; //"mqtt://mqtt.dev-altamedia.com";//"192.168.11.48";
 String serverString = "";
 char serverChar[50];
 
 // const uint16_t mqtt_port = 1884; //1884;//Port của CloudMQTT
-int mqtt_port = 0;
+int mqtt_port = 1883;
 int port = 0;
 byte portH = 0;
 byte portL = 0;
-#define mqtt_user ""
-#define mqtt_pwd ""
+#define mqtt_user "altamedia"
+#define mqtt_pwd "Altamedia"
 
 ////////////////////////////////////////////////////////////////
 #include <EEPROM.h>
@@ -176,6 +176,8 @@ unsigned long getUnixTimeUtc()
 }
 ////////////////////////////////////////
 
+const char data_MQTT[100];
+
 int n[25];
 int n_1[25];
 
@@ -240,10 +242,13 @@ int setgiatriIP = 0;
 //////////////////////////////////////////////////////////////////////////
 void setup(void)
 {
+  Ethernet.init(53);
   Serial.begin(9600);
   Serial.println("POWER CONTROL  ARB PC-04");
   // Serial.print("ID: "); Serial.println(ID);
   // delay(1000);
+  mqttClient.setKeepAlive(30);
+  mqttClient.setSocketTimeout(10);
   sorelay = sizeof(Relay);
   for (int i = 0; i < sorelay; i++)
   {
@@ -263,9 +268,12 @@ void setup(void)
   lcd.setCursor(0, 1);
   lcd.print("ARB PC-04");
   delay(1000);
-
+  Ethernet.begin(mac, ipaddress, dns, gateway, subnet);
+  Serial.print("IP address: ");
+  Serial.println(Ethernet.localIP());
+  mqttClient.setServer(mqtt_server, mqtt_port);
   ///////////////////////////////////////////////////
-  doccauhinh();
+  // doccauhinh();
   long now = millis();
   timer_ketnoimang = now + timerketnoimang;
   ConnectEthernet();
@@ -373,12 +381,12 @@ void doccauhinh()
       serverString += chuString[ServerAddress[i]];
   }
   serverString.toCharArray(serverChar, serverString.length() + 1);
-  mqtt_server = serverChar;
+  mqtt_server = "mqtt.dev-altamedia.com";
   Serial.print("SERVER ADDRESS: ");
   Serial.println(mqtt_server);
   //////////////////////////////////////////////////////PORT
   port = (portH << 8) + (portL); // Serial.print("port: ");Serial.println(port);
-  mqtt_port = port;
+  mqtt_port = 1883;
   Serial.print("mqtt_port: ");
   Serial.println(mqtt_port);
 
@@ -466,10 +474,12 @@ void ConnectEthernet()
     lcd.setCursor(0, 1);
     lcd.print("TO THE NETWORK..."); // CANNOT CONNECT TO THE NETWORK
     delay(1000);
-    if (IPtinh == 0)
-      Ethernet.begin(mac);
-    else
-      Ethernet.begin(mac, ipaddress, gateway, subnet);
+    // if (IPtinh == 0)
+    //   Ethernet.begin(mac);
+    // else
+    mqttClient.setServer(mqtt_server, mqtt_port); // use public broker
+    mqttClient.setCallback(docenthernet);
+    Ethernet.begin(mac, ipaddress, dns, gateway, subnet);
     Serial.print("IP address: ");
     Serial.println(Ethernet.localIP());
     ip = String(Ethernet.localIP()[0]);
@@ -508,9 +518,9 @@ void ConnectEthernet()
       // lcd.setCursor(0, 0);lcd.print("CONNECTING");
       // lcd.setCursor(0, 1);lcd.print("TO SERVER...");
       // delay(1000);
-      mqttClient.setClient(ethClient);
-      mqttClient.setServer(mqtt_server, mqtt_port); // use public broker
-      mqttClient.setCallback(docenthernet);
+      // mqttClient.setClient(ethClient);
+      // mqttClient.setServer(mqtt_server, mqtt_port); // use public broker
+      // mqttClient.setCallback(docenthernet);
 
       mqttClient.subscribe(mqtt_topic_sub_CONTROL, 1); // subscribe (topic, [qos])
 
@@ -541,6 +551,31 @@ void ethernet()
   {
   }
 }
+void reconnect()
+{
+  // Loop until we're reconnected
+  while (!mqttClient.connected())
+  {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (mqttClient.connect("arduinoClient", "altamedia", "Altamedia"))
+    {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      mqttClient.publish("outTopic", "hello world");
+      // ... and resubscribe
+      mqttClient.subscribe("inTopic");
+    }
+    else
+    {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////
 void reconnectserver()
@@ -552,8 +587,8 @@ void reconnectserver()
 
     // Ethernet.localIP();
 
-    if (mqttClient.connect(CLIENT_ID, mqtt_user, mqtt_pwd, mqtt_topic_sub_STATUS, 1, 1, "0")) //;mqttClient.connect(CLIENT_ID,mqtt_user, mqtt_pwd)) // Thực hiện kết nối với mqtt user và pass
-                                                                                              // connect(CLIENT_ID, [username, password], [willTopic, willQoS, willRetain, willMessage], [cleanSession])
+    if (mqttClient.connect(CLIENT_ID, mqtt_user, mqtt_pwd)) //;mqttClient.connect(CLIENT_ID,mqtt_user, mqtt_pwd)) // Thực hiện kết nối với mqtt user và pass
+                                                            // connect(CLIENT_ID, [username, password], [willTopic, willQoS, willRetain, willMessage], [cleanSession])
 
     {
       Serial.println("connected");
@@ -746,6 +781,7 @@ void docdienapdongdien()
       // Serial.print(i);Serial.print(":  ");Serial.print(dienap[i]);Serial.print("V   ");Serial.print(dongdien[i]);Serial.print("A   ");
       // Serial.print(congsuat[i]);Serial.print("W   ");Serial.print(diennangtieuthu[i]);Serial.println("Wh   ");
     }
+    pzemMeasurementsUpdated = true;
     // Serial.println("");
   }
 }
@@ -871,36 +907,42 @@ void guitrangthai()
   bool modeChangedForAuto = false;
   bool relayChangedForAuto = false;
   bool measurementChangedForAuto = false;
+
+  if (pzemMeasurementsUpdated)
+  {
+    measurementChangedForAuto = true;
+    pzemMeasurementsUpdated = false;
+  }
   //////////////////////////////////////////////////////////////MODE
-  // int mode1 = digitalRead(Auto);
-  // if ((mode != mode1) || guitrangthaikhoidong == 1)
-  // {
-  //   // Serial.println("9.1");
-  //   mode = mode1;
-
-  //   byte modegui = 0x00;
-  //   if (mode == 0)
-  //     modegui = 0x00;
-  //   else
-  //     modegui = 0xFF;
-  //   char crcdatagui[1];
-  //   crcdatagui[0] = modegui;
-  //   unsigned int codeCRCgui = calcCRC16(1, crcdatagui);
-  //   int codeCRCguiLo = codeCRCgui >> 8;
-  //   int codeCRCguiHi = codeCRCgui & 0x00FF;
-  //   byte datasend[] = {modegui, codeCRCguiLo, codeCRCguiHi};
-  //   mqttClient.publish(mqtt_topic_pub_MODE, datasend, 3, 1);
-  // }
-
-  bool isAutoModeActive = isAutoHardwareSelected();
-  int mode1 = isAutoModeActive ? HIGH : LOW;
+  int mode1 = digitalRead(Auto);
   if ((mode != mode1) || guitrangthaikhoidong == 1)
   {
     // Serial.println("9.1");
     mode = mode1;
+
+    byte modegui = 0x00;
+    if (mode == 0)
+      modegui = 0x00;
+    else
+      modegui = 0xFF;
+    char crcdatagui[1];
+    crcdatagui[0] = modegui;
+    unsigned int codeCRCgui = calcCRC16(1, crcdatagui);
+    int codeCRCguiLo = codeCRCgui >> 8;
+    int codeCRCguiHi = codeCRCgui & 0x00FF;
+    byte datasend[] = {modegui, codeCRCguiLo, codeCRCguiHi};
+    mqttClient.publish(mqtt_topic_pub_MODE, data_MQTT);
+  }
+
+  bool isAutoModeActive = isAutoHardwareSelected();
+  int mode2 = isAutoModeActive ? HIGH : LOW;
+  if ((mode != mode2) || guitrangthaikhoidong == 1)
+  {
+    // Serial.println("9.1");
+    mode = mode2;
     modeChangedForAuto = true;
 
-    if (mode1 != 0)
+    if (mode2 != 0)
     {
       memset(autoStatusSeq, 0, sizeof(autoStatusSeq));
     }
@@ -973,23 +1015,47 @@ void guitrangthai()
     dongdiengui[0] = dongdiensonguyen;
     // Manual mode skips current MQTT telemetry.
   }
-  //////////////////////////////////////////////////////////////NHIET DO
-  // if (temp_c1 != temp_c1gui || guitrangthaikhoidong == 1)
-  // {
-  //   // Serial.println("9.7");
-  //   temp_c1gui = temp_c1;
-  //   char crcdatagui[1];
-  //   crcdatagui[0] = temp_c1;
-  //   unsigned int codeCRCgui = calcCRC16(1, crcdatagui);
-  //   int codeCRCguiLo = codeCRCgui >> 8;
-  //   int codeCRCguiHi = codeCRCgui & 0x00FF;
-  //   byte datasend[] = {temp_c1, codeCRCguiLo, codeCRCguiHi};
-  //   mqttClient.publish(mqtt_topic_pub_TEM, datasend, 3, 1);
+  bool shouldPublishAutoJson = isAutoModeActive &&
+                               (modeChangedForAuto || relayChangedForAuto || measurementChangedForAuto ||
+                                (guitrangthaikhoidong == 1));
 
-  // } // humidity1
+  if (shouldPublishAutoJson)
+  {
+    const size_t measurementCount = sizeof(dienap) / sizeof(dienap[0]);
+    bool published = powerJsonPublishAutoStatus(mqttClient,
+                                                mqtt_topic_pub_AUTO,
+                                                CLIENT_ID,
+                                                n,
+                                                AUTO_OUTPUT_COUNT,
+                                                dienap,
+                                                measurementCount,
+                                                dongdien,
+                                                diennangtieuthu,
+                                                autoStatusSeq,
+                                                millis,
+                                                isAutoModeActive);
+    if (published)
+    {
+      guitrangthaikhoidong = 0;
+    }
+  }
+}
+//////////////////////////////////////////////////////////////NHIET DO
+// if (temp_c1 != temp_c1gui || guitrangthaikhoidong == 1)
+// {
+//   // Serial.println("9.7");
+//   temp_c1gui = temp_c1;
+//   char crcdatagui[1];
+//   crcdatagui[0] = temp_c1;
+//   unsigned int codeCRCgui = calcCRC16(1, crcdatagui);
+//   int codeCRCguiLo = codeCRCgui >> 8;
+//   int codeCRCguiHi = codeCRCgui & 0x00FF;
+//   byte datasend[] = {temp_c1, codeCRCguiLo, codeCRCguiHi};
+//   mqttClient.publish(mqtt_topic_pub_TEM, datasend, 3, 1);
 
+// } // humidity1
 
-  //////////////////////////////////////////////////////////////DO AM
+//////////////////////////////////////////////////////////////DO AM
 //   if (humidity1 != humidity1gui || guitrangthaikhoidong == 1)
 //   {
 //     // Serial.println("9.8");
@@ -1003,7 +1069,7 @@ void guitrangthai()
 //     mqttClient.publish(mqtt_topic_pub_HUM, datasend, 3, 1);
 //   }
 //   guitrangthaikhoidong = 0;
-}
+// }
 ///////////////////////////////////////////////////////////////////////////////////////////
 void docaserial()
 {
@@ -2970,7 +3036,7 @@ void loop()
     if (!mqttClient.connected())
     {
       ketnoiserver = 0;
-      reconnectserver();
+      reconnect();
     }
     ethernet();
   }
