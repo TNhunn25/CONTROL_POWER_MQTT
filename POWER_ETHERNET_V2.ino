@@ -16,8 +16,9 @@ int test=1;
 /////////////////////////////////////////
 #include <string.h>
 ////////////////////////////////Ethernet
-#include <Ethernet2.h>
+#include <Ethernet.h>
 #include <PubSubClient.h>
+#include "POWER_JSON.h"
 EthernetClient ethClient;
 PubSubClient mqttClient;
 unsigned long timer_ketnoimang= 0;
@@ -124,8 +125,8 @@ float diennangtieuthu[9];
 
 long timer_docdienapdongdien= 0;
 ////////////////////////////Nhiet do, do am
-#include <SHT3x.h>
-SHT3x Sensor;
+#include <Adafruit_SHT31.h>
+Adafruit_SHT31 Sensor;
 int temp_c1;
 int temp_f1;
 int humidity1;
@@ -615,11 +616,13 @@ void docnhietdodoam()
         {
           timer_docnhietdodoam = now;
           
-          Sensor.UpdateData();
+          // Sensor.UpdateData();
       
-          temp_c1 = Sensor.GetTemperature();
+          // temp_c1 = Sensor.GetTemperature();
+          temp_c1 = Sensor.readTemperature();
           //temp_f1 = sht1x1.readTemperatureF();
-          humidity1 = Sensor.GetRelHumidity();
+          // humidity1 = Sensor.GetRelHumidity();
+          humidity1 = Sensor.readHumidity();
           //delay(2500);
         }
     
