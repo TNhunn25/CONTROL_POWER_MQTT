@@ -9,8 +9,9 @@
 // ===================== Cấu hình =====================
 #define KEY "control_power" // Key MD5
 
-extern const char data_MQTT[100];
+extern char data_MQTT[100];
 
+// Làm tròn giá trị float theo số chữ số thập phân mong muốn.
 inline float powerJsonRoundToDecimals(float value, uint8_t decimals)
 {
     float factor = 1.0f;
@@ -32,6 +33,7 @@ inline float powerJsonRoundToDecimals(float value, uint8_t decimals)
     return (long)(value * factor - 0.5f) / factor;
 }
 
+// Loại bỏ khoảng trắng đầu chuỗi (kết quả của dtostrf).
 inline void powerJsonTrimLeadingSpaces(char *buffer)
 {
     if (buffer == nullptr)
@@ -57,6 +59,12 @@ inline void powerJsonTrimLeadingSpaces(char *buffer)
     }
 }
 
+inline bool powerJsonIsValidOnState(int state)
+{
+    return (state == 0) || (state == 1);
+}
+
+// Định dạng số thực thành chuỗi, đảm bảo không trả về chuỗi rỗng.
 inline void powerJsonFormatFloat(float value, uint8_t decimals, char *buffer, size_t bufferSize)
 {
     if (buffer == nullptr || bufferSize == 0)
@@ -74,17 +82,18 @@ inline void powerJsonFormatFloat(float value, uint8_t decimals, char *buffer, si
     }
 }
 
-// Tính MD5 và trả về chuỗi hex 32 ký tự (chữ thường)
+// Trả về chuỗi chữ thường 32 ký tự là MD5 của input.
 inline String calculateMd5Hex(const String &input)
 {
-    unsigned char* digest = MD5::make_hash(input.c_str()); // 16 byte
-    char* hex = MD5::make_digest(digest, 16);              // 32 ký tự hex
+    unsigned char *digest = MD5::make_hash(input.c_str()); // 16 byte
+    char *hex = MD5::make_digest(digest, 16);              // 32 ký tự hex
     String out(hex);
     free(digest);
     free(hex);
     return out;
 }
 
+// Tạo chuỗi ký chữ ký từ các trường trạng thái và tính MD5 cho toàn bộ chuỗi.
 inline String signState(const char *dev, int ch, const char *mode, int on, const String &V,
                         const String &A, const String &kWh, uint32_t seq, uint32_t ts)
 {
@@ -116,10 +125,17 @@ inline String signState(const char *dev, int ch, const char *mode, int on, const
     return calculateMd5Hex(payload);
 }
 
+//Xây dựng payload JSON cho chế độ AUTO và MD5 bảo mật
+//Hàm trả về true nến tạo được payload hợp lệ, ngược lại trả về false
 inline bool powerJsonBuildAutoPayload(const char *deviceId, uint8_t outputNumber, const char *mode, int onState,
                                       int voltage, float current, float energy, uint32_t seq, unsigned long timestamp,
                                       char *outBuffer, size_t outBufferSize)
 {
+    if (!powerJsonIsValidOnState(onState))
+    {
+        return false;
+    }
+
     if (deviceId == nullptr || mode == nullptr || outBuffer == nullptr || outBufferSize == 0U)
     {
         return false;
@@ -135,10 +151,11 @@ inline bool powerJsonBuildAutoPayload(const char *deviceId, uint8_t outputNumber
     powerJsonFormatFloat(currentRounded, 1, currentBuffer, sizeof(currentBuffer));
     powerJsonFormatFloat(energyRounded, 2, energyBuffer, sizeof(energyBuffer));
 
+    //Khởi tạo trường dữ liệu JSON
     doc["Device_ID"] = deviceId;
     doc["OutPut"] = static_cast<unsigned int>(outputNumber);
     doc["Mode"] = mode;
-    doc["On"] = onState;
+    doc["Status_SYS"] = onState;
     doc["V"] = voltage;
     doc["A"] = serialized(currentBuffer);
     doc["Kwh"] = serialized(energyBuffer);
@@ -149,11 +166,13 @@ inline bool powerJsonBuildAutoPayload(const char *deviceId, uint8_t outputNumber
     String currentString(currentBuffer);
     String energyString(energyBuffer);
 
+    //Ký dữ liệu để đảm bảo đầy đủ trước khi gửi 
     String signature = signState(deviceId, static_cast<int>(outputNumber), mode, onState, voltageString, currentString, energyString,
                                  seq, static_cast<uint32_t>(timestamp));
 
-    // data_MQTT = signature;    
-    sprintf(data_MQTT, "%s",signature);                         
+    // data_MQTT = signature;
+    // Lưu chữ ký vào buffer MQTT toàn cục để tái sử dụng bên ngoài.
+    snprintf(data_MQTT,100,"%s", signature);
     if (signature.length() == 0)
     {
         return false;
@@ -161,10 +180,13 @@ inline bool powerJsonBuildAutoPayload(const char *deviceId, uint8_t outputNumber
 
     doc["KEY"] = signature;
 
+    //Chuyển cấu trúc JSON sang dạng chuỗi để gửi qua MQTT
     size_t written = serializeJson(doc, outBuffer, outBufferSize);
     return written > 0U;
 }
 
+//Đẩy trạng thái AUTO của từng relay lên MQTT nếu thiết bị đang ở chế độ AUTO.
+// Hàm trả về true khi có ít nhất một bản tin được Publish thành công.
 inline bool powerJsonPublishAutoStatus(PubSubClient &client, const char *topic, const char *deviceId, const int *relayStates,
                                        uint8_t relayCount, const int *voltages, size_t measurementCount, const float *currents,
                                        const float *energies, uint32_t *sequence, unsigned long (*timeProvider)(), bool isAutoMode)
@@ -221,6 +243,10 @@ inline bool powerJsonPublishAutoStatus(PubSubClient &client, const char *topic, 
                                       sizeof(jsonBuffer)))
         {
             client.publish(topic, jsonBuffer);
+            Serial.print(F("[MQTT][AUTO] TOPIC="));
+            Serial.println(topic);
+            Serial.println(F("[MQTT][AUTO] PAYLOAD="));
+            Serial.println(jsonBuffer); // xem JSON đã build
             published = true;
         }
     }
