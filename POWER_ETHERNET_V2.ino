@@ -47,8 +47,10 @@ unsigned long lastTelemetryMs = 0;
 bool autoModeEnabled = true;
 
 // Khai báo trước các hàm phục vụ việc đọc và phát số liệu.
+void read_pzem(uint8_t channel);
 void publishMeasurements();
 unsigned long provideTimestamp();
+
 void callback(char *topic, byte *payload, unsigned int len)
 {
   Serial.print("[MQTT] RX: ");
@@ -62,15 +64,17 @@ void reconnectMQTT()
 {
   while (!mqttClient.connected())
   {
-    Serial.println("MQTT connecting...");
+    Serial.println(F("MQTT connecting..."));
     if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password))
     {
-      Serial.println("MQTT OK");
+      Serial.println(F("MQTT OK"));
       mqttClient.subscribe(topic_cmd_sub);
     }
     else
     {
-      Serial.println("MQTT fail, retry...");
+      Serial.print(F("MQTT fail (state="));
+      Serial.print(mqttClient.state());
+      Serial.println(F(") retry..."));
       delay(2000);
     }
   }
@@ -116,17 +120,20 @@ Hshopvn_Pzem004t_V2 pzem(&UART_PZEM);
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
+  delay(100);
+  Serial.println(F("\n[SYS] Booting POWER_ETHERNET_V2"));
   Ethernet.init(53);
   UART_PZEM.begin(9600);
-  mqttClient.setBufferSize(1024);
   Ethernet.begin(mac, ip, dns, gateway, subnet);
   pzem.begin(); // PZEM V2 không setAddress, MUX để cô lập từng con
-  Serial.println("PZEM-004T V2 + 74HC4052 + HC4052 lib");
-  Serial.println("Starting Ethernet (STATIC)...");
+  Serial.println(F("PZEM-004T V2 + 74HC4052 + HC4052 lib"));
+  Serial.println(F("Starting Ethernet (STATIC)..."));
 
-  Serial.print("IP: ");
+  Serial.print(F("IP: "));
   Serial.println(Ethernet.localIP());
+
+  Serial.println(F("[SYS] Setup complete, waiting for MQTT"));
 
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
