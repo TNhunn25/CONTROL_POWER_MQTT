@@ -1,6 +1,7 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <PubSubClient.h>
+#include <math.h>
 
 #include "POWER_AUTO.h"
 // ===== Static IP Config =====
@@ -16,8 +17,8 @@ const char *mqtt_user = "altamedia";
 const char *mqtt_password = "Altamedia@%";
 const char *mqtt_client_id = "DEMO_HG_QUANTRAC_2025";
 
-const char *topic_test_pub = "rd/dempw";
-const char *topic_cmd_sub = "ems_prod/EMS_HG000_0000/command";
+const char *topic_test_pub = "CRL_POWER/STATUS";
+const char *topic_cmd_sub = "CRL_POWER/command";
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
 // ===== PZEM địa chỉ Modbus =====
@@ -26,10 +27,17 @@ PubSubClient mqttClient(ethClient);
 char data_MQTT[100] = {0};
 
 // Định danh thiết bị và số lượng relay cần gửi trạng thái.
-const char *device_id = "EMS_HG000_0000";
+const char *device_id = "CRL_POWER_01";
 const uint8_t RELAY_COUNT = 4;
 // MEASUREMENT_COUNT = 1 (kênh tổng) + số relay.
 const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
+
+//----------------
+const int Auto = 30; // doc trang thai auto man
+const int Man = 31;
+const int Den_Auto_Man = 13;
+int den = 0;
+//----------------
 
 // Trạng thái xuất relay và số liệu đo mô phỏng.
 int relayStates[RELAY_COUNT] = {HIGH, HIGH, HIGH, HIGH};
@@ -40,15 +48,26 @@ float energies[MEASUREMENT_COUNT] = {0.0f};
 uint32_t sequenceCounters[RELAY_COUNT] = {0};
 
 // Khoảng thời gian gửi dữ liệu và hệ số đổi ra giờ.
-const unsigned long TELEMETRY_INTERVAL_MS = 5000UL;
-const float HOURS_PER_INTERVAL = (float)TELEMETRY_INTERVAL_MS / 3600000.0f;
+const unsigned long TELEMETRY_INTERVAL_MS = 30000UL;
+const unsigned long SENSOR_POLL_INTERVAL_MS = 1000UL;
+const int VOLTAGE_CHANGE_THRESHOLD = 1;       // Volt
+const float CURRENT_CHANGE_THRESHOLD = 0.05f; // Ampere
+const float ENERGY_CHANGE_THRESHOLD = 0.001f; // kWh
 
 unsigned long lastTelemetryMs = 0;
+unsigned long lastSensorPollMs = 0;
+bool telemetryDirty = false;
+bool measurementDirty[MEASUREMENT_COUNT] = {false};
+
+int lastPublishedVoltages[MEASUREMENT_COUNT] = {0};
+float lastPublishedCurrents[MEASUREMENT_COUNT] = {0.0f};
+float lastPublishedEnergies[MEASUREMENT_COUNT] = {0.0f};
+unsigned long lastMeasurementUpdateMs[MEASUREMENT_COUNT] = {0};
 bool autoModeEnabled = true;
 
 // Khai báo trước các hàm phục vụ việc đọc và phát số liệu.
 void read_pzem(uint8_t channel);
-void publishMeasurements();
+void publishMeasurements(bool publishAll);
 unsigned long provideTimestamp();
 
 void callback(char *topic, byte *payload, unsigned int len)
@@ -80,7 +99,7 @@ void reconnectMQTT()
   }
 }
 
-///////////////////////////////////////////////////
+//-----------------------------------------------
 #include "HC4052.h"              // lib multiplexer
 #include "Hshopvn_Pzem004t_V2.h" // lib PZEM V2
 
@@ -97,26 +116,7 @@ HC4052 mux(MUX_A, MUX_B); // EN cứng GND
 #define UART_PZEM Serial3
 Hshopvn_Pzem004t_V2 pzem(&UART_PZEM);
 
-// void read_pzem(uint8_t channel)
-// {
-//   mux.setChannel(channel); // chọn kênh (lib sẽ disable/enable ngắn)
-//   delay(80);
-
-//   pzem_info d = pzem.getData(); // đọc dữ liệu PZEM
-//   Serial.print("CH");
-//   Serial.print(channel);
-//   Serial.print(" | V=");
-//   Serial.print(d.volt);
-//   Serial.print(" I =");
-//   Serial.print(d.ampe);
-//   Serial.print(" P=");
-//   Serial.print(d.power);
-//   Serial.print(" Pf =");
-//   Serial.print(d.powerFactor);
-//   Serial.print(" F=");
-//   Serial.println(d.freq);
-// }
-/////////////////////////////////////////////////
+//------------------------------------------
 
 void setup()
 {
@@ -137,6 +137,9 @@ void setup()
 
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
+  pinMode(Auto, INPUT_PULLUP);
+  pinMode(Man, INPUT_PULLUP);
+  pinMode(Den_Auto_Man, OUTPUT);
 }
 void loop()
 {
@@ -146,18 +149,30 @@ void loop()
 
   unsigned long now = millis();
 
-  if (now - lastTelemetryMs >= TELEMETRY_INTERVAL_MS)
+  if (now - lastSensorPollMs >= SENSOR_POLL_INTERVAL_MS)
   {
-    lastTelemetryMs = now;
+    lastSensorPollMs = now;
 
     for (uint8_t i = 0; i < RELAY_COUNT; i++)
     {
-      // Đọc từng kênh PZEM (hiện đang mô phỏng dữ liệu).
+      // Đọc từng kênh PZEM
       read_pzem(i);
       delay(50);
     }
-    // Sau khi cập nhật mảng số liệu, tiến hành đóng gói và gửi MQTT.
-    publishMeasurements();
+  }
+
+  bool timeToPublish = (now - lastTelemetryMs) >= TELEMETRY_INTERVAL_MS;
+
+  if (timeToPublish || telemetryDirty)
+  {
+    if (digitalRead(31) == 1)
+    {
+      return;
+    }
+    Serial.print("anh Danh");
+    publishMeasurements(timeToPublish);
+    lastTelemetryMs = now;
+    // telemetryDirty = false;
   }
 
   Serial.println("--------------------");
@@ -171,20 +186,56 @@ void read_pzem(uint8_t channel)
   if (measurementIndex >= MEASUREMENT_COUNT)
     return;
 
+  unsigned long now = millis();
+
   // Chọn ngõ 4052 tương ứng (lib HC4052 dùng 0..3)
   mux.setChannel(channel);
   delay(80);
-
   // Đọc PZEM
   pzem_info d = pzem.getData();
+
   // Cập nhật buffer để publish JSON
   if (d.volt >= 0 && d.volt < 260)
     voltages[measurementIndex] = d.volt;
   if (d.ampe >= 0)
     currents[measurementIndex] = d.ampe;
 
-  // Cộng dồn kWh theo nhịp đo (TELEMETRY_INTERVAL_MS)
-  energies[measurementIndex] += (voltages[measurementIndex] * currents[measurementIndex]) / 1000.0f * ((float)TELEMETRY_INTERVAL_MS / 3600000.0f);
+  if (lastMeasurementUpdateMs[measurementIndex] != 0)
+  {
+    unsigned long elapsedMs = now - lastMeasurementUpdateMs[measurementIndex];
+    energies[measurementIndex] += (voltages[measurementIndex] * currents[measurementIndex]) / 1000.0f * ((float)elapsedMs / 3600000.0f);
+  }
+  lastMeasurementUpdateMs[measurementIndex] = now;
+
+  bool channelDirty = false;
+
+  if (abs(voltages[measurementIndex] - lastPublishedVoltages[measurementIndex]) >= VOLTAGE_CHANGE_THRESHOLD)
+  {
+    channelDirty = true;
+  }
+
+  if (fabsf(currents[measurementIndex] - lastPublishedCurrents[measurementIndex]) >= CURRENT_CHANGE_THRESHOLD)
+  {
+    channelDirty = true;
+  }
+
+  if (fabsf(energies[measurementIndex] - lastPublishedEnergies[measurementIndex]) >= ENERGY_CHANGE_THRESHOLD)
+  {
+    channelDirty = true;
+  }
+
+  if (channelDirty)
+  {
+    // if (digitalRead(31) == 0)
+    // {
+    //   return;
+    // }
+    
+    // đánh dấu riêng từng kênh thay đổi ====
+    // Khi chỉ một output thay đổi, chỉ kênh đó được publish ngay.
+    measurementDirty[measurementIndex] = true;
+    telemetryDirty = true;
+  }
 
   // (tuỳ) debug
   Serial.print("CH");
@@ -197,7 +248,7 @@ void read_pzem(uint8_t channel)
   Serial.println(energies[measurementIndex], 3);
 }
 
-void publishMeasurements()
+void publishMeasurements(bool publishAll)
 {
   // Thời điểm đo dùng làm trường Time trong payload.
   unsigned long timestamp = provideTimestamp();
@@ -207,6 +258,12 @@ void publishMeasurements()
     uint8_t measurementIndex = channel + 1;
     if (measurementIndex >= MEASUREMENT_COUNT)
     {
+      continue;
+    }
+
+    if (!publishAll && !measurementDirty[measurementIndex])
+    {
+      // bỏ qua kênh không thay đổi khi publish tức thì ====
       continue;
     }
 
@@ -231,6 +288,20 @@ void publishMeasurements()
       Serial.println(payload);
       Serial.print("[MQTT] KEY: ");
       Serial.println(data_MQTT);
+
+      lastPublishedVoltages[measurementIndex] = voltages[measurementIndex];
+      lastPublishedCurrents[measurementIndex] = currents[measurementIndex];
+      lastPublishedEnergies[measurementIndex] = energies[measurementIndex];
+      measurementDirty[measurementIndex] = false;
+    }
+  }
+  telemetryDirty = false;
+  for (size_t i = 0; i < MEASUREMENT_COUNT; ++i)
+  {
+    if (measurementDirty[i])
+    {
+      telemetryDirty = true;
+      break;
     }
   }
 }
@@ -238,5 +309,5 @@ void publishMeasurements()
 unsigned long provideTimestamp()
 {
   // Với demo, sử dụng millis()/1000 làm timestamp dạng giây.
-  return millis() / 1000UL;
+  return millis() / 100UL;
 }
