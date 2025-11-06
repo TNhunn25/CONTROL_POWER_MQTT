@@ -19,6 +19,8 @@ const char *mqtt_client_id = "DEMO_HG_QUANTRAC_2025";
 
 const char *topic_test_pub = "CRL_POWER/STATUS";
 const char *topic_cmd_sub = "CRL_POWER/command";
+const char *topic_ack_pub = "CRL_POWER/ACK";
+
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
 // ===== PZEM địa chỉ Modbus =====
@@ -48,7 +50,7 @@ int vitrirelay = 0;
 //-------------------
 
 // Trạng thái xuất relay và số liệu đo mô phỏng.
-int relayStates[RELAY_COUNT] = {HIGH, HIGH, HIGH, HIGH};
+int relayStates[RELAY_COUNT] = {0};
 int voltages[MEASUREMENT_COUNT] = {0};
 float currents[MEASUREMENT_COUNT] = {0.0f};
 float energies[MEASUREMENT_COUNT] = {0.0f};
@@ -65,6 +67,7 @@ const float ENERGY_CHANGE_THRESHOLD = 0.001f; // kWh
 unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorPollMs = 0;
 bool telemetryDirty = false;
+uint32_t ackSequence = 0;
 bool measurementDirty[MEASUREMENT_COUNT] = {false};
 
 int lastPublishedVoltages[MEASUREMENT_COUNT] = {0};
@@ -77,6 +80,8 @@ bool autoModeEnabled = true;
 void read_pzem(uint8_t channel);
 void publishMeasurements(bool publishAll);
 unsigned long provideTimestamp();
+void setRelayOutput(uint8_t channelIndex, bool on);
+void publishRelayAck(const char *outputLabel, bool success, bool onState);
 
 void callback(char *topic, byte *payload, unsigned int len)
 {
@@ -117,34 +122,42 @@ void callback(char *topic, byte *payload, unsigned int len)
       on = (strstr(s, "ON") != NULL);
     }
 
-    if (ch >= 1 && ch <= 4)
+    if (ch >= 1 && ch <= RELAY_COUNT)
     {
-      // ACTIVE-LOW: ON -> LOW, OFF -> HIGH
-      digitalWrite(Relay[ch - 1], on ? LOW : HIGH);
+      setRelayOutput(static_cast<uint8_t>(ch - 1), on);
+      publishRelayAck(s, true, on);
     }
     else if (strncasecmp(s, "ALL", 3) == 0)
     {
-      for (int i = 0; i < 4; ++i)
-        digitalWrite(Relay[i], on ? LOW : HIGH);
+      for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+      {
+        setRelayOutput(i, on);
+      }
+      publishRelayAck(s, true, on);
+    }
+    else
+    {
+      publishRelayAck(s, false, false);
     }
   }
-
-  // Lấy BUTTON dưới dạng số nguyên.
-  // ArduinoJson tự chuyển "1" (chuỗi) hoặc 1 (số) thành int.
-  // int btn = doc["OUTPUT"].as<int>();
-
-  // Serial.print(F("[MQTT] OUTPUT="));
-  // Serial.println(btn);
-
-  // if (btn == 1)
-  // {
-  //   digitalWrite(Relay[0], 0);
-  // }
-  // else if (btn == 0)
-  // {
-  //   digitalWrite(Relay[0], 1);
-  // }
 }
+
+// Lấy BUTTON dưới dạng số nguyên.
+// ArduinoJson tự chuyển "1" (chuỗi) hoặc 1 (số) thành int.
+// int btn = doc["OUTPUT"].as<int>();
+
+// Serial.print(F("[MQTT] OUTPUT="));
+// Serial.println(btn);
+
+// if (btn == 1)
+// {
+//   digitalWrite(Relay[0], 0);
+// }
+// else if (btn == 0)
+// {
+//   digitalWrite(Relay[0], 1);
+// }
+// }
 
 void reconnectMQTT()
 {
@@ -385,6 +398,51 @@ void publishMeasurements(bool publishAll)
     }
   }
 }
+
+//------------------ACK
+
+void setRelayOutput(uint8_t channelIndex, bool on)
+{
+  if (channelIndex >= RELAY_COUNT)
+  {
+    return;
+  }
+
+  digitalWrite(Relay[channelIndex], on ? LOW : HIGH);
+  relayStates[channelIndex] = on ? 1 : 0;
+
+  uint8_t measurementIndex = channelIndex + 1;
+  if (measurementIndex < MEASUREMENT_COUNT)
+  {
+    measurementDirty[measurementIndex] = true;
+    telemetryDirty = true;
+  }
+}
+
+void publishRelayAck(const char *outputLabel, bool success, bool onState)
+{
+  StaticJsonDocument<128> ackDoc;
+  ackDoc["OUTPUT"] = (outputLabel != nullptr) ? outputLabel : "";
+  ackDoc["Result"] = success ? "OK" : "FAIL";
+  ackDoc["Status_SYS"] = success ? (onState ? "ON" : "OFF") : "UNKNOWN";
+  ackDoc["Seq"] = ++ackSequence;
+  ackDoc["Time"] = provideTimestamp();
+
+  char ackPayload[128];
+  size_t ackLen = serializeJson(ackDoc, ackPayload, sizeof(ackPayload));
+  if (ackLen > 0U)
+  {
+    mqttClient.publish(topic_ack_pub, ackPayload);
+    Serial.print(F("[MQTT] ACK: "));
+    Serial.println(ackPayload);
+  }
+  else
+  {
+    Serial.println(F("[MQTT] ACK serialization failed"));
+  }
+}
+
+//-----------------------------------------
 
 unsigned long provideTimestamp()
 {
