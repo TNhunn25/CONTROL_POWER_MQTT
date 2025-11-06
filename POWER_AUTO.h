@@ -155,7 +155,7 @@ inline bool powerJsonBuildAutoPayload(const char *deviceId, uint8_t outputNumber
     doc["Device_ID"] = deviceId;
     doc["OutPut"] = static_cast<unsigned int>(outputNumber);
     doc["Mode"] = mode;
-    doc["Status_SYS"] = onState;
+    doc["On"] = onState;
     doc["V"] = voltage;
     doc["A"] = serialized(currentBuffer);
     doc["Kwh"] = serialized(energyBuffer);

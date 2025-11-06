@@ -39,6 +39,14 @@ const int Den_Auto_Man = 13;
 int den = 0;
 //----------------
 
+//---------------Relay
+byte Relay[] = {5, 6, 8, 11, 41, 37, 35, 33};
+byte ReadRelay[] = {3, 7, 10, 12, 40, 36, 34, 32};
+byte sorelay;
+
+int vitrirelay = 0;
+//-------------------
+
 // Trạng thái xuất relay và số liệu đo mô phỏng.
 int relayStates[RELAY_COUNT] = {HIGH, HIGH, HIGH, HIGH};
 int voltages[MEASUREMENT_COUNT] = {0};
@@ -78,7 +86,66 @@ void callback(char *topic, byte *payload, unsigned int len)
   for (unsigned int i = 0; i < len; i++)
     Serial.print((char)payload[i]);
   Serial.println();
+
+  StaticJsonDocument<128> doc;
+
+  DeserializationError err = deserializeJson(doc, payload, len);
+  if (err)
+  {
+    Serial.print(F("[MQTT] JSON parse error: "));
+    Serial.println(err.c_str());
+    return;
+  }
+
+  // Hỗ trợ 2 dạng gói:
+  //  A) {"OUTPUT":"1, ON"}           // 1..4 + ON/OFF trong cùng chuỗi
+  //  B) {"OUTPUT":"1","STATE":"ON"}  // kênh và trạng thái tách riêng
+  if (doc["OUTPUT"].is<const char *>())
+  {
+    const char *s = doc["OUTPUT"]; // "1"  hoặc "1, ON"
+    int ch = atoi(s);              // lấy số kênh 1..4
+    bool on = false;
+
+    // ưu tiên đọc STATE nếu có
+    if (doc["STATE"].is<const char *>())
+    {
+      on = (strcasecmp(doc["STATE"].as<const char *>(), "ON") == 0);
+    }
+    else
+    {
+      // nếu không có STATE, dò ngay trong chuỗi OUTPUT ("1, ON")
+      on = (strstr(s, "ON") != NULL);
+    }
+
+    if (ch >= 1 && ch <= 4)
+    {
+      // ACTIVE-LOW: ON -> LOW, OFF -> HIGH
+      digitalWrite(Relay[ch - 1], on ? LOW : HIGH);
+    }
+    else if (strncasecmp(s, "ALL", 3) == 0)
+    {
+      for (int i = 0; i < 4; ++i)
+        digitalWrite(Relay[i], on ? LOW : HIGH);
+    }
+  }
+
+  // Lấy BUTTON dưới dạng số nguyên.
+  // ArduinoJson tự chuyển "1" (chuỗi) hoặc 1 (số) thành int.
+  // int btn = doc["OUTPUT"].as<int>();
+
+  // Serial.print(F("[MQTT] OUTPUT="));
+  // Serial.println(btn);
+
+  // if (btn == 1)
+  // {
+  //   digitalWrite(Relay[0], 0);
+  // }
+  // else if (btn == 0)
+  // {
+  //   digitalWrite(Relay[0], 1);
+  // }
 }
+
 void reconnectMQTT()
 {
   while (!mqttClient.connected())
@@ -137,9 +204,23 @@ void setup()
 
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
+  mqttClient.subscribe(topic_cmd_sub, 1); // subscribe (topic, [qos])
+
   pinMode(Auto, INPUT_PULLUP);
   pinMode(Man, INPUT_PULLUP);
   pinMode(Den_Auto_Man, OUTPUT);
+
+  sorelay = sizeof(Relay);
+  for (int i = 0; i < sorelay; i++)
+  {
+    pinMode(Relay[i], OUTPUT);
+    // delay(1000);
+    digitalWrite(Relay[i], 1);
+  }
+  for (int i = 0; i < sorelay; i++)
+  {
+    pinMode(ReadRelay[i], INPUT);
+  }
 }
 void loop()
 {
@@ -169,7 +250,6 @@ void loop()
     {
       return;
     }
-    Serial.print("anh Danh");
     publishMeasurements(timeToPublish);
     lastTelemetryMs = now;
     // telemetryDirty = false;
@@ -230,7 +310,7 @@ void read_pzem(uint8_t channel)
     // {
     //   return;
     // }
-    
+
     // đánh dấu riêng từng kênh thay đổi ====
     // Khi chỉ một output thay đổi, chỉ kênh đó được publish ngay.
     measurementDirty[measurementIndex] = true;
