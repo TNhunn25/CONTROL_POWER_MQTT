@@ -408,14 +408,19 @@ void setRelayOutput(uint8_t channelIndex, bool on)
     return;
   }
 
+  int desiredState = on ? 1 : 0;
+  if (relayStates[channelIndex] == desiredState)
+  {
+    return;
+  }
+
   digitalWrite(Relay[channelIndex], on ? LOW : HIGH);
-  relayStates[channelIndex] = on ? 1 : 0;
+  relayStates[channelIndex] = desiredState;
 
   uint8_t measurementIndex = channelIndex + 1;
   if (measurementIndex < MEASUREMENT_COUNT)
   {
     measurementDirty[measurementIndex] = true;
-    telemetryDirty = true;
   }
 }
 
@@ -427,6 +432,25 @@ void publishRelayAck(const char *outputLabel, bool success, bool onState)
   ackDoc["Status_SYS"] = success ? (onState ? "ON" : "OFF") : "UNKNOWN";
   ackDoc["Seq"] = ++ackSequence;
   ackDoc["Time"] = provideTimestamp();
+
+  float voltageValue = 0.0f;
+  float currentValue = 0.0f;
+  float energyValue = 0.0f;
+
+  if (outputLabel != nullptr)
+  {
+    int channelNumber = atoi(outputLabel);
+    if (channelNumber >= 1 && channelNumber <= RELAY_COUNT)
+    {
+      uint8_t measurementIndex = static_cast<uint8_t>(channelNumber);
+      if (measurementIndex < MEASUREMENT_COUNT)
+      {
+        voltageValue = static_cast<float>(voltages[measurementIndex]);
+        currentValue = currents[measurementIndex];
+        energyValue = energies[measurementIndex];
+      }
+    }
+  }
 
   char ackPayload[128];
   size_t ackLen = serializeJson(ackDoc, ackPayload, sizeof(ackPayload));
