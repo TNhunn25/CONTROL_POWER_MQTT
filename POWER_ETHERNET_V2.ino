@@ -2,6 +2,7 @@
 #include <Ethernet.h>
 #include <PubSubClient.h>
 #include <math.h>
+#include <EEPROM.h>
 
 #include "POWER_AUTO.h"
 // ===== Static IP Config =====
@@ -33,6 +34,11 @@ const char *device_id = "CRL_POWER_01";
 const uint8_t RELAY_COUNT = 4;
 // MEASUREMENT_COUNT = 1 (kênh tổng) + số relay.
 const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
+
+// Địa chỉ lưu trạng thái relay trong EEPROM.
+const uint8_t EEPROM_SIGNATURE = 0xA5;
+const int EEPROM_SIGNATURE_ADDR = 0;
+const int EEPROM_RELAY_BASE_ADDR = EEPROM_SIGNATURE_ADDR + 1;
 
 //----------------
 const int Auto = 30; // doc trang thai auto man
@@ -85,6 +91,7 @@ void publishMeasurements(bool publishAll);
 unsigned long provideTimestamp();
 void setRelayOutput(uint8_t channelIndex, bool on);
 void publishRelayAck(const char *outputLabel, bool success, bool onState);
+void loadRelayStates();
 
 void callback(char *topic, byte *payload, unsigned int len)
 {
@@ -237,6 +244,7 @@ void setup()
   {
     pinMode(ReadRelay[i], INPUT);
   }
+  loadRelayStates();
 }
 void loop()
 {
@@ -428,18 +436,19 @@ void setRelayOutput(uint8_t channelIndex, bool on)
   }
 
   int desiredState = on ? 1 : 0;
-  if (relayStates[channelIndex] == desiredState)
+  if (relayStates[channelIndex] != desiredState) //== sửa thành !=
   {
-    return;
-  }
+    digitalWrite(Relay[channelIndex], on ? LOW : HIGH);
+    relayStates[channelIndex] = desiredState;
+    EEPROM.update(EEPROM_RELAY_BASE_ADDR + channelIndex, static_cast<uint8_t>(desiredState));
+    // return;
 
-  digitalWrite(Relay[channelIndex], on ? LOW : HIGH);
-  relayStates[channelIndex] = desiredState;
-
-  uint8_t measurementIndex = channelIndex + 1;
-  if (measurementIndex < MEASUREMENT_COUNT)
-  {
-    measurementDirty[measurementIndex] = true;
+    uint8_t measurementIndex = channelIndex + 1;
+    if (measurementIndex < MEASUREMENT_COUNT)
+    {
+      measurementDirty[measurementIndex] = true;
+    }
+    telemetryDirty = true;
   }
 }
 
@@ -491,4 +500,34 @@ unsigned long provideTimestamp()
 {
   // Với demo, sử dụng millis()/1000 làm timestamp dạng giây.
   return millis() / 100UL;
+}
+
+void loadRelayStates()
+{
+  bool signatureValid = (EEPROM.read(EEPROM_SIGNATURE_ADDR) == EEPROM_SIGNATURE);
+  if (!signatureValid)
+  {
+    EEPROM.update(EEPROM_SIGNATURE_ADDR, EEPROM_SIGNATURE);
+    for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+    {
+      EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, static_cast<uint8_t>(0));
+    }
+  }
+
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    uint8_t storedState = signatureValid ? EEPROM.read(EEPROM_RELAY_BASE_ADDR + i) : 0;
+    storedState = (storedState == 1) ? 1 : 0;
+
+    relayStates[i] = storedState;
+    digitalWrite(Relay[i], storedState ? LOW : HIGH);
+
+    uint8_t measurementIndex = i + 1;
+    if (measurementIndex < MEASUREMENT_COUNT)
+    {
+      measurementDirty[measurementIndex] = true;
+    }
+  }
+
+  telemetryDirty = true;
 }

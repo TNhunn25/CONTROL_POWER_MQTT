@@ -53,12 +53,12 @@ void lcd_show(int channel) {
   {
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("PZEM"); lcd.print(channel); lcd.print(": ");
+  lcd.print("Channel"); lcd.print(channel); lcd.print(": ");
   lcd.print(ch[channel].V, 1); lcd.print("V ");
 
   lcd.setCursor(0, 1);
   lcd.print(ch[channel].I, 2); lcd.print("A ");
-  lcd.print(ch[channel].P, 1); lcd.print("W");
+  lcd.print(ch[channel].P, 1); lcd.print("Kwh");
   last_channel = channel;
   }
 }
