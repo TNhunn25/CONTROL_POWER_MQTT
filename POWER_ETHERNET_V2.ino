@@ -2,6 +2,7 @@
 #include <Ethernet.h>
 #include <PubSubClient.h>
 #include <math.h>
+#include <EEPROM.h>
 
 #include "POWER_AUTO.h"
 // ===== Static IP Config =====
@@ -33,6 +34,11 @@ const char *device_id = "CRL_POWER_01";
 const uint8_t RELAY_COUNT = 4;
 // MEASUREMENT_COUNT = 1 (kênh tổng) + số relay.
 const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
+
+// Địa chỉ lưu trạng thái relay trong EEPROM.
+const uint8_t EEPROM_SIGNATURE = 0xA5;
+const int EEPROM_SIGNATURE_ADDR = 0;
+const int EEPROM_RELAY_BASE_ADDR = EEPROM_SIGNATURE_ADDR + 1;
 
 //----------------
 const int Auto = 30; // doc trang thai auto man
@@ -70,6 +76,9 @@ bool telemetryDirty = false;
 uint32_t ackSequence = 0;
 bool measurementDirty[MEASUREMENT_COUNT] = {false};
 
+// Duy trì vị trí kênh sẽ publish tiếp theo để đảm bảo gửi tuần tự.
+uint8_t nextPublishChannel = 0;
+
 int lastPublishedVoltages[MEASUREMENT_COUNT] = {0};
 float lastPublishedCurrents[MEASUREMENT_COUNT] = {0.0f};
 float lastPublishedEnergies[MEASUREMENT_COUNT] = {0.0f};
@@ -82,6 +91,7 @@ void publishMeasurements(bool publishAll);
 unsigned long provideTimestamp();
 void setRelayOutput(uint8_t channelIndex, bool on);
 void publishRelayAck(const char *outputLabel, bool success, bool onState);
+void loadRelayStates();
 
 void callback(char *topic, byte *payload, unsigned int len)
 {
@@ -234,6 +244,7 @@ void setup()
   {
     pinMode(ReadRelay[i], INPUT);
   }
+  loadRelayStates();
 }
 void loop()
 {
@@ -343,20 +354,34 @@ void read_pzem(uint8_t channel)
 
 void publishMeasurements(bool publishAll)
 {
+  if (publishAll)
+  {
+    for (uint8_t channel = 0; channel < RELAY_COUNT; ++channel)
+    {
+      uint8_t measurementIndex = channel + 1;
+      if (measurementIndex < MEASUREMENT_COUNT)
+      {
+        measurementDirty[measurementIndex] = true;
+      }
+    }
+    telemetryDirty = true;
+    nextPublishChannel = 0;
+  }
+
   // Thời điểm đo dùng làm trường Time trong payload.
   unsigned long timestamp = provideTimestamp();
 
-  for (uint8_t channel = 0; channel < RELAY_COUNT; ++channel)
+  for (uint8_t attempt = 0; attempt < RELAY_COUNT; ++attempt)
   {
+    uint8_t channel = (nextPublishChannel + attempt) % RELAY_COUNT;
     uint8_t measurementIndex = channel + 1;
     if (measurementIndex >= MEASUREMENT_COUNT)
     {
       continue;
     }
 
-    if (!publishAll && !measurementDirty[measurementIndex])
+    if (!measurementDirty[measurementIndex])
     {
-      // bỏ qua kênh không thay đổi khi publish tức thì ====
       continue;
     }
 
@@ -386,8 +411,11 @@ void publishMeasurements(bool publishAll)
       lastPublishedCurrents[measurementIndex] = currents[measurementIndex];
       lastPublishedEnergies[measurementIndex] = energies[measurementIndex];
       measurementDirty[measurementIndex] = false;
+      nextPublishChannel = (channel + 1) % RELAY_COUNT;
+      break;
     }
   }
+
   telemetryDirty = false;
   for (size_t i = 0; i < MEASUREMENT_COUNT; ++i)
   {
@@ -398,7 +426,6 @@ void publishMeasurements(bool publishAll)
     }
   }
 }
-
 //------------------ACK
 
 void setRelayOutput(uint8_t channelIndex, bool on)
@@ -409,27 +436,28 @@ void setRelayOutput(uint8_t channelIndex, bool on)
   }
 
   int desiredState = on ? 1 : 0;
-  if (relayStates[channelIndex] == desiredState)
+  if (relayStates[channelIndex] != desiredState) //== sửa thành !=
   {
-    return;
-  }
+    digitalWrite(Relay[channelIndex], on ? LOW : HIGH);
+    relayStates[channelIndex] = desiredState;
+    EEPROM.update(EEPROM_RELAY_BASE_ADDR + channelIndex, static_cast<uint8_t>(desiredState));
+    // return;
 
-  digitalWrite(Relay[channelIndex], on ? LOW : HIGH);
-  relayStates[channelIndex] = desiredState;
-
-  uint8_t measurementIndex = channelIndex + 1;
-  if (measurementIndex < MEASUREMENT_COUNT)
-  {
-    measurementDirty[measurementIndex] = true;
+    uint8_t measurementIndex = channelIndex + 1;
+    if (measurementIndex < MEASUREMENT_COUNT)
+    {
+      measurementDirty[measurementIndex] = true;
+    }
+    telemetryDirty = true;
   }
 }
 
 void publishRelayAck(const char *outputLabel, bool success, bool onState)
 {
   StaticJsonDocument<128> ackDoc;
-  ackDoc["OUTPUT"] = (outputLabel != nullptr) ? outputLabel : "";
+  ackDoc["Channel"] = (outputLabel != nullptr) ? outputLabel : "";
   ackDoc["Result"] = success ? "OK" : "FAIL";
-  ackDoc["Status_SYS"] = success ? (onState ? "ON" : "OFF") : "UNKNOWN";
+  ackDoc["Status"] = success ? (onState ? "ON" : "OFF") : "UNKNOWN";
   ackDoc["Seq"] = ++ackSequence;
   ackDoc["Time"] = provideTimestamp();
 
@@ -472,4 +500,34 @@ unsigned long provideTimestamp()
 {
   // Với demo, sử dụng millis()/1000 làm timestamp dạng giây.
   return millis() / 100UL;
+}
+
+void loadRelayStates()
+{
+  bool signatureValid = (EEPROM.read(EEPROM_SIGNATURE_ADDR) == EEPROM_SIGNATURE);
+  if (!signatureValid)
+  {
+    EEPROM.update(EEPROM_SIGNATURE_ADDR, EEPROM_SIGNATURE);
+    for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+    {
+      EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, static_cast<uint8_t>(0));
+    }
+  }
+
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    uint8_t storedState = signatureValid ? EEPROM.read(EEPROM_RELAY_BASE_ADDR + i) : 0;
+    storedState = (storedState == 1) ? 1 : 0;
+
+    relayStates[i] = storedState;
+    digitalWrite(Relay[i], storedState ? LOW : HIGH);
+
+    uint8_t measurementIndex = i + 1;
+    if (measurementIndex < MEASUREMENT_COUNT)
+    {
+      measurementDirty[measurementIndex] = true;
+    }
+  }
+
+  telemetryDirty = true;
 }
