@@ -39,6 +39,10 @@ const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
 const uint8_t EEPROM_SIGNATURE = 0xA5;
 const int EEPROM_SIGNATURE_ADDR = 0;
 const int EEPROM_RELAY_BASE_ADDR = EEPROM_SIGNATURE_ADDR + 1;
+const int EEPROM_ENERGY_BASE_ADDR = EEPROM_RELAY_BASE_ADDR + RELAY_COUNT;
+const int EEPROM_ENERGY_SIGNATURE_ADDR = EEPROM_ENERGY_BASE_ADDR + (MEASUREMENT_COUNT * sizeof(float));
+const uint8_t EEPROM_ENERGY_SIGNATURE = 0x5A;
+const float NGUONG_LUU_NANG_LUONG = 0.01f; // kWh
 
 //----------------
 const int Auto = 30; // doc trang thai auto man
@@ -60,6 +64,8 @@ int relayStates[RELAY_COUNT] = {0};
 int voltages[MEASUREMENT_COUNT] = {0};
 float currents[MEASUREMENT_COUNT] = {0.0f};
 float energies[MEASUREMENT_COUNT] = {0.0f};
+float nangLuongDaLuu[MEASUREMENT_COUNT] = {0.0f};
+
 // Bộ đếm tăng dần để tạo trường Seq cho từng relay.
 uint32_t sequenceCounters[RELAY_COUNT] = {0};
 
@@ -92,6 +98,8 @@ unsigned long provideTimestamp();
 void setRelayOutput(uint8_t channelIndex, bool on);
 void publishRelayAck(const char *outputLabel, bool success, bool onState);
 void loadRelayStates();
+void docNangLuongTuEEPROM();
+void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi);
 
 void callback(char *topic, byte *payload, unsigned int len)
 {
@@ -249,7 +257,10 @@ void setup()
     pinMode(ReadRelay[i], INPUT);
   }
   loadRelayStates();
+  docNangLuongTuEEPROM();
 }
+
+// Vòng lặp chính
 void loop()
 {
   if (!mqttClient.connected())
@@ -314,6 +325,8 @@ void read_pzem(uint8_t channel)
     energies[measurementIndex] += (voltages[measurementIndex] * currents[measurementIndex]) / 1000.0f * ((float)elapsedMs / 3600000.0f);
   }
   lastMeasurementUpdateMs[measurementIndex] = now;
+
+  luuNangLuongVaoEEPROM(measurementIndex, energies[measurementIndex]);
 
   bool channelDirty = false;
 
@@ -465,25 +478,6 @@ void publishRelayAck(const char *outputLabel, bool success, bool onState)
   ackDoc["Seq"] = ++ackSequence;
   ackDoc["Time"] = provideTimestamp();
 
-  float voltageValue = 0.0f;
-  float currentValue = 0.0f;
-  float energyValue = 0.0f;
-
-  if (outputLabel != nullptr)
-  {
-    int channelNumber = atoi(outputLabel);
-    if (channelNumber >= 1 && channelNumber <= RELAY_COUNT)
-    {
-      uint8_t measurementIndex = static_cast<uint8_t>(channelNumber);
-      if (measurementIndex < MEASUREMENT_COUNT)
-      {
-        voltageValue = static_cast<float>(voltages[measurementIndex]);
-        currentValue = currents[measurementIndex];
-        energyValue = energies[measurementIndex];
-      }
-    }
-  }
-
   char ackPayload[128];
   size_t ackLen = serializeJson(ackDoc, ackPayload, sizeof(ackPayload));
   if (ackLen > 0U)
@@ -534,4 +528,55 @@ void loadRelayStates()
   }
 
   telemetryDirty = true;
+}
+
+void docNangLuongTuEEPROM()
+{
+  bool duLieuHopLe = (EEPROM.read(EEPROM_ENERGY_SIGNATURE_ADDR) == EEPROM_ENERGY_SIGNATURE);
+
+  for (uint8_t i = 0; i < MEASUREMENT_COUNT; ++i)
+  {
+    float giaTri = 0.0f;
+    int diaChi = EEPROM_ENERGY_BASE_ADDR + (i * sizeof(float));
+
+    if (duLieuHopLe)
+    {
+      EEPROM.get(diaChi, giaTri);
+      if (!isfinite(giaTri) || giaTri < 0.0f)
+      {
+        giaTri = 0.0f;
+      }
+    }
+    else
+    {
+      EEPROM.put(diaChi, 0.0f);
+    }
+
+    energies[i] = giaTri;
+    nangLuongDaLuu[i] = giaTri;
+    measurementDirty[i] = true;
+  }
+
+  if (!duLieuHopLe)
+  {
+    EEPROM.update(EEPROM_ENERGY_SIGNATURE_ADDR, EEPROM_ENERGY_SIGNATURE);
+  }
+
+  telemetryDirty = true;
+}
+
+void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi)
+{
+  if (chiSo >= MEASUREMENT_COUNT || !isfinite(giaTriMoi) || giaTriMoi < 0.0f)
+  {
+    return;
+  }
+
+  if (fabsf(giaTriMoi - nangLuongDaLuu[chiSo]) < NGUONG_LUU_NANG_LUONG)
+  {
+    return;
+  }
+
+  EEPROM.put(EEPROM_ENERGY_BASE_ADDR + (chiSo * sizeof(float)), giaTriMoi);
+  nangLuongDaLuu[chiSo] = giaTriMoi;
 }
