@@ -142,6 +142,10 @@ void callback(char *topic, byte *payload, unsigned int len)
       for (uint8_t i = 0; i < RELAY_COUNT; ++i)
       {
         setRelayOutput(i, on);
+        if (i + 1U < RELAY_COUNT)
+        {
+          delay(3000);
+        }
       }
       publishRelayAck(s, true, on);
     }
