@@ -67,14 +67,14 @@ void lcd_show(int channel)
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Channel ");
-  lcd.print(channel);
+  // lcd.print(channel);
   lcd.print(channel + 1);
   lcd.print(": ");
-  lcd.print(ch[channel].V, 1);
+  lcd.print(ch[channel].V, 0);
   lcd.print("V ");
 
   lcd.setCursor(0, 1);
-  lcd.print(ch[channel].I, 2);
+  lcd.print(ch[channel].I, 1);
   lcd.print("A ");
   lcd.print(ch[channel].P, 2);
   lcd.print("Kwh");
@@ -83,58 +83,51 @@ void lcd_show(int channel)
   lastDisplayValues[channel] = ch[channel];
   lastDisplayValid[channel] = true;
 }
+
 void checkpulse2()
 {
-  currentStateCLK = digitalRead(pinA);
-  if (currentStateCLK != lastStateCLK && currentStateCLK == HIGH)
-  {
-    if (digitalRead(pinB) != currentStateCLK)
-    {
-      encoderPos = encoderPos + 1;
-      currentDir = "CCW";
-    }
-    else
-    {
-      encoderPos = encoderPos - 1;
-      currentDir = "CW";
-    }
+  static unsigned long lastStepMs = 0;
+  const unsigned long DEBOUNCE_MS = 2; // 1–3 ms đủ cho encoder cơ
 
-    Serial.print("Direction: ");
-    Serial.print(currentDir);
-    Serial.print(" | Counter: ");
-    Serial.println(encoderPos);
-  }
-  switch (encoderPos)
+  currentStateCLK = digitalRead(pinA);
+
+  if (millis() - lastStepMs >= DEBOUNCE_MS)
   {
-  case 0:
-  case 1:
-    flag_encoderPos = 0;
-    break;
-  case 2:
-  case 3:
-    flag_encoderPos = 1;
-    break;
-  case 4:
-  case 5:
-    flag_encoderPos = 2;
-    break;
-  case 6:
-  case 7:
-    flag_encoderPos = 3;
-    break;
-  default:
-    if (encoderPos <= 0)
+    if (currentStateCLK != lastStateCLK && currentStateCLK == HIGH)
     {
-      flag_encoderPos = 0;
-      encoderPos = 0;
+      if (digitalRead(pinB) != currentStateCLK)
+      {
+        encoderPos++;
+        currentDir = "CCW";
+      }
+      else
+      {
+        encoderPos--;
+        currentDir = "CW";
+      }
+
+      // Giới hạn & map 2 nấc/1 kênh → 0..3
+      if (encoderPos < 0)
+        encoderPos = 0;
+      if (encoderPos > 8)
+        encoderPos = 8;
+      flag_encoderPos = encoderPos / 2;
+      if (flag_encoderPos > 3)
+        flag_encoderPos = 3;
+
+      Serial.print("Direction: ");
+      Serial.print(currentDir);
+      Serial.print(" | Counter: ");
+      Serial.print(encoderPos);
+      Serial.print(" | Channel: ");
+      Serial.println(flag_encoderPos);
+
+      lastStepMs = millis();
     }
-    else if (encoderPos > 8)
-    {
-      flag_encoderPos = 3;
-      encoderPos = 8;
-    }
-    break;
   }
+
+  // QUAN TRỌNG:
+  lastStateCLK = currentStateCLK;
 }
 
 // lastStateCLK = currentStateCLK;
@@ -150,8 +143,11 @@ void checkpulse2()
 // }
 inline void lcdv2_begin()
 {
-  pinMode(pinA, INPUT);
-  pinMode(pinB, INPUT);
+  // pinMode(pinA, INPUT);
+  // pinMode(pinB, INPUT);
+
+  pinMode(pinA, INPUT_PULLUP);
+  pinMode(pinB, INPUT_PULLUP);
 
   lcd.init();
   lcd.backlight();
@@ -180,14 +176,13 @@ inline void lcdv2_begin()
 //-----------------------------------
 #define LCD_TICK_INTERVAL_MS 200UL
 
-inline void lcdv2_tick_display()
+inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
 {
   checkpulse2(); // doc xung
   lcd_show(flag_encoderPos);
 }
 
-
-inline void lcdv2_tick_standalone()
+inline void lcdv2_tick_standalone() // đọc ch[0..3] mỗi 500ms
 {
   if (lastReadMs <= millis())
   {

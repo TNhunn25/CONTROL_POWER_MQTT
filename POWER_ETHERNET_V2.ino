@@ -3,8 +3,12 @@
 #include <PubSubClient.h>
 #include <math.h>
 #include <EEPROM.h>
+#include <Wire.h>
 
 #include "POWER_AUTO.h"
+#include "lcdv2.h"
+
+#define LCDV2_EMBEDDED
 // ===== Static IP Config =====
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34};
 IPAddress ip(192, 168, 80, 196);
@@ -206,17 +210,21 @@ void reconnectMQTT()
 #include "Hshopvn_Pzem004t_V2.h" // lib PZEM V2
 
 // Khuyên dùng chân “an toàn” trên Mega (tránh D13 vì SPI LED):
+#ifndef MUX_A
 #define MUX_A 28
+#endif
+#ifndef MUX_B
 #define MUX_B 27
-// Nếu EN đã kéo GND cứng: KHÔNG truyền enablePin
-HC4052 mux(MUX_A, MUX_B); // EN cứng GND
+#endif
+// Nếu EN đã kéo GND cứng: KHÔNG truyền enablePin (instance mux nằm trong lcdv2.h)
 
 // Nếu bạn muốn điều khiển EN bằng 1 chân ví dụ D24:
 // #define MUX_EN 24
 // HC4052 mux(MUX_A, MUX_B, MUX_EN);  // nhớ nối EN của IC vào D24 (KHÔNG kéo GND)
 
+#ifndef UART_PZEM
 #define UART_PZEM Serial3
-Hshopvn_Pzem004t_V2 pzem(&UART_PZEM);
+#endif
 
 //------------------------------------------
 
@@ -240,6 +248,8 @@ void setup()
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
   mqttClient.subscribe(topic_cmd_sub, 1); // subscribe (topic, [qos])
+
+  lcdv2_begin();
 
   pinMode(Auto, INPUT_PULLUP);
   pinMode(Man, INPUT_PULLUP);
@@ -269,6 +279,8 @@ void loop()
 
   unsigned long now = millis();
 
+  lcdv2_tick_display();
+
   if (now - lastSensorPollMs >= SENSOR_POLL_INTERVAL_MS)
   {
     lastSensorPollMs = now;
@@ -290,12 +302,19 @@ void loop()
       return;
     }
     publishMeasurements(timeToPublish);
-    lastTelemetryMs = now;
+    if (timeToPublish)
+    {
+      lastTelemetryMs = now;
+    }
     // telemetryDirty = false;
   }
 
-  Serial.println("--------------------");
-  delay(1000);
+  // static unsigned long lastLog = 0;
+  // if (millis() - lastLog >= 1000)
+  // {
+  //   Serial.println("--------------------");
+  //   lastLog = millis();
+  // }
 }
 
 // ===== GIỮ LẠI DUY NHẤT HÀM NÀY =====
@@ -325,6 +344,13 @@ void read_pzem(uint8_t channel)
     energies[measurementIndex] += (voltages[measurementIndex] * currents[measurementIndex]) / 1000.0f * ((float)elapsedMs / 3600000.0f);
   }
   lastMeasurementUpdateMs[measurementIndex] = now;
+
+  if (channel < (sizeof(ch) / sizeof(ch[0])))
+  {
+    ch[channel].V = voltages[measurementIndex];
+    ch[channel].I = currents[measurementIndex];
+    ch[channel].P = d.power;
+  }
 
   luuNangLuongVaoEEPROM(measurementIndex, energies[measurementIndex]);
 
@@ -369,6 +395,7 @@ void read_pzem(uint8_t channel)
   Serial.println(energies[measurementIndex], 3);
 }
 
+// Dùng để đẩy gói tin lên MQTT
 void publishMeasurements(bool publishAll)
 {
   if (publishAll)
@@ -386,11 +413,15 @@ void publishMeasurements(bool publishAll)
   }
 
   // Thời điểm đo dùng làm trường Time trong payload.
-  unsigned long timestamp = provideTimestamp();
+  unsigned long timestamp = provideTimestamp(); // 200UL
+
+  uint8_t startChannel = nextPublishChannel;
+  bool publishedAny = false;
+  uint8_t lastPublishedChannel = nextPublishChannel;
 
   for (uint8_t attempt = 0; attempt < RELAY_COUNT; ++attempt)
   {
-    uint8_t channel = (nextPublishChannel + attempt) % RELAY_COUNT;
+    uint8_t channel = (startChannel + attempt) % RELAY_COUNT;
     uint8_t measurementIndex = channel + 1;
     if (measurementIndex >= MEASUREMENT_COUNT)
     {
@@ -428,9 +459,14 @@ void publishMeasurements(bool publishAll)
       lastPublishedCurrents[measurementIndex] = currents[measurementIndex];
       lastPublishedEnergies[measurementIndex] = energies[measurementIndex];
       measurementDirty[measurementIndex] = false;
-      nextPublishChannel = (channel + 1) % RELAY_COUNT;
-      break;
+      publishedAny = true;
+      lastPublishedChannel = channel;
     }
+  }
+
+  if (publishedAny)
+  {
+    nextPublishChannel = (lastPublishedChannel + 1) % RELAY_COUNT;
   }
 
   telemetryDirty = false;
@@ -472,7 +508,14 @@ void setRelayOutput(uint8_t channelIndex, bool on)
 void publishRelayAck(const char *outputLabel, bool success, bool onState)
 {
   StaticJsonDocument<128> ackDoc;
-  ackDoc["Channel"] = (outputLabel != nullptr) ? outputLabel : "";
+  char label[32];
+  strncpy(label, outputLabel ? outputLabel : "", sizeof(label) - 1);
+  label[sizeof(label) - 1] = '\0';
+  char *p = strchr(label, ','); // cắt ", ON/OFF"
+  if (p)
+    *p = '\0';
+
+  ackDoc["Channel"] = label;
   ackDoc["Result"] = success ? "OK" : "FAIL";
   ackDoc["Status"] = success ? (onState ? "ON" : "OFF") : "UNKNOWN";
   ackDoc["Seq"] = ++ackSequence;
@@ -497,7 +540,7 @@ void publishRelayAck(const char *outputLabel, bool success, bool onState)
 unsigned long provideTimestamp()
 {
   // Với demo, sử dụng millis()/1000 làm timestamp dạng giây.
-  return millis() / 100UL;
+  return millis() / 200UL;
 }
 
 void loadRelayStates()
