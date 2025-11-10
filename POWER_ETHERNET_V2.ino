@@ -93,7 +93,8 @@ int lastPublishedVoltages[MEASUREMENT_COUNT] = {0};
 float lastPublishedCurrents[MEASUREMENT_COUNT] = {0.0f};
 float lastPublishedEnergies[MEASUREMENT_COUNT] = {0.0f};
 unsigned long lastMeasurementUpdateMs[MEASUREMENT_COUNT] = {0};
-bool autoModeEnabled = true;
+// bool autoModeEnabled = true;
+bool autoModeEnabled;
 
 // Khai báo trước các hàm phục vụ việc đọc và phát số liệu.
 void read_pzem(uint8_t channel);
@@ -132,6 +133,17 @@ void callback(char *topic, byte *payload, unsigned int len)
     const char *s = doc["OUTPUT"]; // "1"  hoặc "1, ON"
     int ch = atoi(s);              // lấy số kênh 1..4
     bool on = false;
+
+    // ===== KHÓA LỆNH KHI ĐANG MAN =====
+    if (!autoModeEnabled)
+    { // đang ở MAN -> không cho điều khiển từ xa
+      bool cur = false;
+      if (ch >= 1 && ch <= RELAY_COUNT)
+        cur = (relayStates[ch - 1] == 1);
+      publishRelayAck(s, false, cur); // báo FAIL, giữ nguyên trạng thái hiện tại
+      return;                         // THOÁT SỚM, KHÔNG setRelayOutput
+    }
+    // ==================================
 
     // ưu tiên đọc STATE nếu có
     if (doc["STATE"].is<const char *>())
@@ -251,9 +263,30 @@ void setup()
 
   lcdv2_begin();
 
-  pinMode(Auto, INPUT_PULLUP);
-  pinMode(Man, INPUT_PULLUP);
+  // pinMode(Auto, INPUT_PULLUP);
+  // pinMode(Man, INPUT_PULLUP);
+
+  pinMode(Auto, INPUT); // công tắc cấp Vcc khi chọn
+  pinMode(Man, INPUT);  // MAN = HIGH
   pinMode(Den_Auto_Man, OUTPUT);
+
+  //----------------------------
+  bool manActive = (digitalRead(Man) == HIGH);   // chân 31
+  bool autoActive = (digitalRead(Auto) == HIGH); // chân 30
+
+  if (manActive && !autoActive)
+    autoModeEnabled = false; // MAN
+  else if (autoActive && !manActive)
+    autoModeEnabled = true; // AUTO
+  else
+    autoModeEnabled = true; // mơ hồ -> mặc định AUTO
+
+  digitalWrite(Den_Auto_Man, autoModeEnabled ? LOW : HIGH); // LED bật khi MAN
+  for (uint8_t i = 1; i < MEASUREMENT_COUNT; ++i)
+    measurementDirty[i] = true;
+  telemetryDirty = true;
+  nextPublishChannel = 0;
+  //----------------------------
 
   sorelay = sizeof(Relay);
   for (int i = 0; i < sorelay; i++)
@@ -292,6 +325,30 @@ void loop()
       delay(50);
     }
   }
+
+  //------------------------------------
+  static bool lastAuto = autoModeEnabled;
+
+  bool manActive = (digitalRead(Man) == HIGH);
+  bool autoActive = (digitalRead(Auto) == HIGH);
+
+  bool curAuto = lastAuto; // giữ nguyên nếu mơ hồ
+  if (manActive && !autoActive)
+    curAuto = false; // MAN
+  else if (autoActive && !manActive)
+    curAuto = true; // AUTO
+
+  if (curAuto != lastAuto)
+  {
+    autoModeEnabled = curAuto;
+    digitalWrite(Den_Auto_Man, curAuto ? LOW : HIGH); // LED bật khi MAN
+    for (uint8_t i = 1; i < MEASUREMENT_COUNT; ++i)
+      measurementDirty[i] = true;
+    telemetryDirty = true;
+    nextPublishChannel = 0;
+    lastAuto = curAuto;
+  }
+  //------------------------------------
 
   bool timeToPublish = (now - lastTelemetryMs) >= TELEMETRY_INTERVAL_MS;
 
@@ -440,6 +497,7 @@ void publishMeasurements(bool publishAll)
     if (powerJsonBuildAutoPayload(device_id,
                                   measurementIndex,
                                   autoModeEnabled ? "AUTO" : "MAN",
+                                  // relayStates[channel] == HIGH ? 1 : 0,
                                   relayStates[channel] == HIGH ? 1 : 0,
                                   voltages[measurementIndex],
                                   currents[measurementIndex],
@@ -518,6 +576,7 @@ void publishRelayAck(const char *outputLabel, bool success, bool onState)
   ackDoc["Channel"] = label;
   ackDoc["Result"] = success ? "OK" : "FAIL";
   ackDoc["Status"] = success ? (onState ? "ON" : "OFF") : "UNKNOWN";
+  ackDoc["Mode"] = autoModeEnabled ? "AUTO" : "MAN";
   ackDoc["Seq"] = ++ackSequence;
   ackDoc["Time"] = provideTimestamp();
 
