@@ -297,10 +297,10 @@ void loop()
 
   if (timeToPublish || telemetryDirty)
   {
-    if (digitalRead(31) == 1)
-    {
-      return;
-    }
+    // if (digitalRead(31) == 1)
+    // {
+    //   return;
+    // }
     publishMeasurements(timeToPublish);
     if (timeToPublish)
     {
