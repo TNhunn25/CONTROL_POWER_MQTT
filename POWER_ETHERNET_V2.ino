@@ -35,7 +35,7 @@ char data_MQTT[100] = {0};
 
 // Định danh thiết bị và số lượng relay cần gửi trạng thái.
 const char *device_id = "CRL_POWER";
-const uint8_t RELAY_COUNT = 4;
+// const uint8_t RELAY_COUNT = 4;
 // MEASUREMENT_COUNT = 1 (kênh tổng) + số relay.
 const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
 
@@ -48,9 +48,9 @@ const int EEPROM_ENERGY_SIGNATURE_ADDR = EEPROM_ENERGY_BASE_ADDR + (MEASUREMENT_
 const uint8_t EEPROM_ENERGY_SIGNATURE = 0x5A;
 const float NGUONG_LUU_NANG_LUONG = 0.01f; // kWh
 
-//----------------
-const int Auto = 30; // doc trang thai auto man
-const int Man = 31;
+// //----------------
+// const int Auto = 30; // doc trang thai auto man
+// const int Man = 31;
 const int Den_Auto_Man = 13;
 int den = 0;
 //----------------
@@ -64,7 +64,7 @@ int vitrirelay = 0;
 //-------------------
 
 // Trạng thái xuất relay và số liệu đo mô phỏng.
-int relayStates[RELAY_COUNT] = {0};
+// int relayStates[RELAY_COUNT] = {0};
 int voltages[MEASUREMENT_COUNT] = {0};
 float currents[MEASUREMENT_COUNT] = {0.0f};
 float energies[MEASUREMENT_COUNT] = {0.0f};
@@ -93,8 +93,10 @@ int lastPublishedVoltages[MEASUREMENT_COUNT] = {0};
 float lastPublishedCurrents[MEASUREMENT_COUNT] = {0.0f};
 float lastPublishedEnergies[MEASUREMENT_COUNT] = {0.0f};
 unsigned long lastMeasurementUpdateMs[MEASUREMENT_COUNT] = {0};
-bool autoModeEnabled = true;
+// bool autoModeEnabled = true;
 // bool autoModeEnabled;
+
+unsigned long setupTime = 0;
 
 // Khai báo trước các hàm phục vụ việc đọc và phát số liệu.
 void read_pzem(uint8_t channel);
@@ -181,34 +183,18 @@ void callback(char *topic, byte *payload, unsigned int len)
   }
 }
 
-// Lấy BUTTON dưới dạng số nguyên.
-// ArduinoJson tự chuyển "1" (chuỗi) hoặc 1 (số) thành int.
-// int btn = doc["OUTPUT"].as<int>();
-
-// Serial.print(F("[MQTT] OUTPUT="));
-// Serial.println(btn);
-
-// if (btn == 1)
-// {
-//   digitalWrite(Relay[0], 0);
-// }
-// else if (btn == 0)
-// {
-//   digitalWrite(Relay[0], 1);
-// }
-// }
-
 void reconnectMQTT()
 {
   while (!mqttClient.connected())
   {
     Serial.println(F("MQTT connecting..."));
-    if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password))
+    if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password,"CRL_POWER/INFO",1,1,"offline")) //connect(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage)
     {
       Serial.println(F("MQTT OK"));
       mqttClient.subscribe(topic_cmd_sub);
       clearRetainedCmd();
     }
+
     else
     {
       Serial.print(F("MQTT fail (state="));
@@ -231,11 +217,6 @@ void reconnectMQTT()
 #define MUX_B 27
 #endif
 // Nếu EN đã kéo GND cứng: KHÔNG truyền enablePin (instance mux nằm trong lcdv2.h)
-
-// Nếu bạn muốn điều khiển EN bằng 1 chân ví dụ D24:
-// #define MUX_EN 24
-// HC4052 mux(MUX_A, MUX_B, MUX_EN);  // nhớ nối EN của IC vào D24 (KHÔNG kéo GND)
-
 
 #ifndef UART_PZEM
 #define UART_PZEM Serial3
@@ -302,6 +283,9 @@ void setup()
 {
   Serial.begin(9600);
   delay(100);
+  lcdv2_begin();
+  lcd.setCursor(0, 0);
+  setupTime = millis();
   Serial.println(F("\n[SYS] Booting POWER_ETHERNET_V2"));
   Ethernet.init(53);
   UART_PZEM.begin(9600);
@@ -325,7 +309,6 @@ void setup()
   mqttClient.subscribe(topic_cmd_sub, 1); // subscribe (topic, [qos])
   clearRetainedCmd();
 
-  lcdv2_begin();
 
   pinMode(Auto, INPUT_PULLUP);
   pinMode(Man, INPUT_PULLUP);
@@ -376,8 +359,10 @@ void loop()
   mqttClient.loop();
 
   unsigned long now = millis();
-
-  lcdv2_tick_display();
+  if( millis()- setupTime > 5000)
+  {
+    lcdv2_tick_display();
+  }
 
   if (now - lastSensorPollMs >= SENSOR_POLL_INTERVAL_MS)
   {
@@ -404,12 +389,10 @@ void loop()
   if (manActive && !autoActive)
   {
     curAuto = false; // MAN
-    lcdv2_tick_display();
   }
   else if (autoActive && !manActive)
   {
     curAuto = true; // AUTO
-    lcdv2_tick_display();
   }
 
   if (curAuto != lastAuto)
@@ -422,7 +405,6 @@ void loop()
     {
       for (uint8_t i = 0; i < RELAY_COUNT; ++i)
       {
-        lcdv2_tick_display();
         EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, (uint8_t)relayStates[i]);
         uint8_t measurementIndex = i + 1;
         if (measurementIndex < MEASUREMENT_COUNT)
@@ -448,103 +430,13 @@ void loop()
 
   if (timeToPublish || telemetryDirty)
   {
-    // if (digitalRead(31) == 1)
-    // {
-    //   return;
-    // }
     publishMeasurements(timeToPublish);
     if (timeToPublish)
     {
       lastTelemetryMs = now;
     }
-    // telemetryDirty = false;
   }
-
-  // static unsigned long lastLog = 0;
-  // if (millis() - lastLog >= 1000)
-  // {
-  //   Serial.println("--------------------");
-  //   lastLog = millis();
-  // }
 }
-
-// ===== GIỮ LẠI DUY NHẤT HÀM NÀY =====
-// void read_pzem(uint8_t channel)
-// {                                         // channel: 0..(RELAY_COUNT-1) cho 4052
-//   uint8_t measurementIndex = channel + 1; // 0 = tổng, 1..N = từng kênh
-//   if (measurementIndex >= MEASUREMENT_COUNT)
-//     return;
-
-//   unsigned long now = millis();
-
-//   // Chọn ngõ 4052 tương ứng (lib HC4052 dùng 0..3)
-//   mux.setChannel(channel);
-//   delay(80);
-//   // Đọc PZEM
-//   pzem_info d = pzem.getData();
-
-//   // Cập nhật buffer để publish JSON
-//   if (d.volt >= 0 && d.volt < 260)
-//     voltages[measurementIndex] = d.volt;
-//   if (d.ampe >= 0)
-//     currents[measurementIndex] = d.ampe;
-
-//   if (lastMeasurementUpdateMs[measurementIndex] != 0)
-//   {
-//     unsigned long elapsedMs = now - lastMeasurementUpdateMs[measurementIndex];
-//     energies[measurementIndex] += (voltages[measurementIndex] * currents[measurementIndex]) / 1000.0f * ((float)elapsedMs / 3600000.0f);
-//   }
-//   lastMeasurementUpdateMs[measurementIndex] = now;
-
-//   if (channel < (sizeof(ch) / sizeof(ch[0])))
-//   {
-//     ch[channel].V = voltages[measurementIndex]; // V
-//     ch[channel].I = currents[measurementIndex]; // A
-//     ch[channel].P = energies[measurementIndex]; // kWh (khớp MQTT)
-//   }
-
-//   luuNangLuongVaoEEPROM(measurementIndex, energies[measurementIndex]);
-
-//   bool channelDirty = false;
-
-//   if (abs(voltages[measurementIndex] - lastPublishedVoltages[measurementIndex]) >= VOLTAGE_CHANGE_THRESHOLD)
-//   {
-//     channelDirty = true;
-//   }
-
-//   if (fabsf(currents[measurementIndex] - lastPublishedCurrents[measurementIndex]) >= CURRENT_CHANGE_THRESHOLD)
-//   {
-//     channelDirty = true;
-//   }
-
-//   if (fabsf(energies[measurementIndex] - lastPublishedEnergies[measurementIndex]) >= ENERGY_CHANGE_THRESHOLD)
-//   {
-//     channelDirty = true;
-//   }
-
-//   if (channelDirty)
-//   {
-//     // if (digitalRead(31) == 0)
-//     // {
-//     //   return;
-//     // }
-
-//     // đánh dấu riêng từng kênh thay đổi ====
-//     // Khi chỉ một output thay đổi, chỉ kênh đó được publish ngay.
-//     measurementDirty[measurementIndex] = true;
-//     telemetryDirty = true;
-//   }
-
-//   // (tuỳ) debug
-//   Serial.print("CH");
-//   Serial.print(channel);
-//   Serial.print(" | V=");
-//   Serial.print(voltages[measurementIndex]);
-//   Serial.print(" I=");
-//   Serial.print(currents[measurementIndex], 3);
-//   Serial.print(" kWh=");
-//   Serial.println(energies[measurementIndex], 3);
-// }
 
 // Thêm 2 macro ở đầu file (hoặc ngay trên read_pzem):
 #define V_MIN_ENERGY 90    // chỉ tính kWh khi V ≥ 90V
@@ -629,13 +521,11 @@ void publishMeasurements(bool publishAll)
     for (uint8_t i = 0; i < MEASUREMENT_COUNT; ++i)
     {
       measurementDirty[i] = true;
-      lcdv2_tick_display();
     }
     telemetryDirty = true;
     nextPublishChannel = 0;
   }
 
-  lcdv2_tick_display();
   unsigned long timestamp = provideTimestamp(); // thời điểm đo dùng cho payload
 
   // ===== PUBLISH CÁC KÊNH 1..RELAY_COUNT TRƯỚC =====
@@ -645,7 +535,6 @@ void publishMeasurements(bool publishAll)
 
   for (uint8_t attempt = 0; attempt < RELAY_COUNT; ++attempt)
   {
-    lcdv2_tick_display();
     uint8_t channel = (startChannel + attempt) % RELAY_COUNT; // 0..RELAY_COUNT-1
     uint8_t measurementIndex = channel + 1;                   // 1..MEASUREMENT_COUNT-1
     if (measurementIndex >= MEASUREMENT_COUNT)
@@ -679,7 +568,6 @@ void publishMeasurements(bool publishAll)
         // Serial.println(data_MQTT);
       }
 
-      // lcdv2_tick_display();
       lastPublishedVoltages[measurementIndex] = voltages[measurementIndex];
       lastPublishedCurrents[measurementIndex] = currents[measurementIndex];
       lastPublishedEnergies[measurementIndex] = energies[measurementIndex];
@@ -725,15 +613,6 @@ void publishMeasurements(bool publishAll)
     {
 
       // --- Đổi Channel 0 -> "Tong"---
-      StaticJsonDocument<256> patchDoc;
-      DeserializationError e = deserializeJson(patchDoc, payload);
-      if (!e)
-      {
-        patchDoc["Channel"] = "Tong";
-        serializeJson(patchDoc, payload, sizeof(payload));
-      }
-      // --------------------------------------------
-
       if (ui32_timeout_mqtt <= millis())
       {
         mqttClient.publish(topic_test_pub, (const uint8_t *)payload, strlen(payload), false);
@@ -848,7 +727,7 @@ void loadRelayStates()
 
     relayStates[i] = storedState;
     digitalWrite(Relay[i], storedState ? LOW : HIGH);
-    Serial.println(relayStates[3]);
+    // Serial.println(relayStates[3]);
     uint8_t measurementIndex = i + 1;
     if (measurementIndex < MEASUREMENT_COUNT)
     {
@@ -857,6 +736,39 @@ void loadRelayStates()
   }
 
   telemetryDirty = true;
+}
+
+void dongBoTrangThaiRelayTuPhanCung()
+{
+  // Đọc trạng thái thực tế của relay (MAN) và cập nhật biến phần mềm cho đúng.
+  bool anyChanged = false;
+
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    int actualState = (digitalRead(ReadRelay[i]) == LOW) ? 0 : 1;
+
+    if (relayStates[i] != actualState)
+    {
+      // CẬP NHẬT BỘ NHỚ CHẠY
+      relayStates[i] = actualState;
+
+      // GHI EEPROM NGAY ĐỂ LƯU "CHẾ ĐỘ CUỐI CÙNG" (kể cả MAN)
+      EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, static_cast<uint8_t>(actualState));
+
+      // Đánh dấu kênh thay đổi để publish
+      uint8_t measurementIndex = i + 1;
+      if (measurementIndex < MEASUREMENT_COUNT)
+      {
+        measurementDirty[measurementIndex] = true;
+      }
+      anyChanged = true;
+    }
+  }
+
+  if (anyChanged)
+  {
+    telemetryDirty = true;
+  }
 }
 
 void docNangLuongTuEEPROM()
@@ -910,36 +822,3 @@ void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi)
   nangLuongDaLuu[chiSo] = giaTriMoi;
 }
 
-void dongBoTrangThaiRelayTuPhanCung()
-{
-  // Đọc trạng thái thực tế của relay (MAN) và cập nhật biến phần mềm cho đúng.
-  bool anyChanged = false;
-
-  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
-  {
-    int actualState = (digitalRead(ReadRelay[i]) == LOW) ? 0 : 1;
-    lcdv2_tick_display();
-
-    if (relayStates[i] != actualState)
-    {
-      // CẬP NHẬT BỘ NHỚ CHẠY
-      relayStates[i] = actualState;
-
-      // GHI EEPROM NGAY ĐỂ LƯU "CHẾ ĐỘ CUỐI CÙNG" (kể cả MAN)
-      EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, static_cast<uint8_t>(actualState));
-
-      // Đánh dấu kênh thay đổi để publish
-      uint8_t measurementIndex = i + 1;
-      if (measurementIndex < MEASUREMENT_COUNT)
-      {
-        measurementDirty[measurementIndex] = true;
-      }
-      anyChanged = true;
-    }
-  }
-
-  if (anyChanged)
-  {
-    telemetryDirty = true;
-  }
-}
