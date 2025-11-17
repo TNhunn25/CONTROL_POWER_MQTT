@@ -497,15 +497,19 @@ void read_pzem(uint8_t channel)
   lastMeasurementUpdateMs[measurementIndex] = now;
 
   // === dữ liệu cho LCD: V, I, kWh (round 3 số để không rung)
-  
+
   if (channel < (sizeof(ch) / sizeof(ch[0])))
   {
-    ch[channel].V = voltages[measurementIndex];
-    ch[channel].I = currents[measurementIndex];
+    uint8_t displayIndex = channel + 1; // ch[0] dành cho kênh tổng
+    if (displayIndex < CHANNEL_COUNT)
+    {
+      ch[displayIndex].V = voltages[measurementIndex];
+      ch[displayIndex].I = currents[measurementIndex];
 
-    float kwh_disp = energies[measurementIndex];
-    kwh_disp = floorf(kwh_disp * 1000.0f + 0.5f) / 1000.0f; // round về 0.001 kWh
-    ch[channel].P = kwh_disp;                               // LCD sẽ in kWh từ ch[channel].P
+      float kwh_disp = energies[measurementIndex];
+      kwh_disp = floorf(kwh_disp * 1000.0f + 0.5f) / 1000.0f; // round về 0.001 kWh
+      ch[displayIndex].P = kwh_disp;                          // LCD sẽ in kWh từ ch[displayIndex].P
+    }
   }
 
   luuNangLuongVaoEEPROM(measurementIndex, energies[measurementIndex]);
