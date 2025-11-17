@@ -497,6 +497,7 @@ void read_pzem(uint8_t channel)
   lastMeasurementUpdateMs[measurementIndex] = now;
 
   // === dữ liệu cho LCD: V, I, kWh (round 3 số để không rung)
+  
   if (channel < (sizeof(ch) / sizeof(ch[0])))
   {
     ch[channel].V = voltages[measurementIndex];

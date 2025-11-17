@@ -37,6 +37,8 @@ const unsigned long HOLD_MS = 3; // thời gian phải duy trì điều kiện (
 const int Auto = 30;             // Doc trang thai Auto Man
 const int Man = 31;
 const uint8_t RELAY_COUNT = 4;
+const uint8_t CHANNEL_COUNT = 5;        // tổng cộng 5 kênh tính cả kênh 0 (Tatal CH)
+const uint8_t DISPLAY_SCREEN_COUNT = 6; // 5 kênh đo + 1 trang trạng thái relay
 bool autoModeEnabled;
 int lastRelayStates[RELAY_COUNT] = {-1};
 unsigned long lastDisplayUpdateMs = 0;
@@ -50,9 +52,9 @@ typedef struct
   float V, I, P;
 } PZEMVAL;
 
-PZEMVAL ch[4]; // lưu dữ liệu cho 4 kênh
-PZEMVAL lastDisplayValues[4];
-bool lastDisplayValid[4] = {false, false, false, false};
+PZEMVAL ch[CHANNEL_COUNT]; // lưu dữ liệu cho 4 kênh, cũ ch[4];
+PZEMVAL lastDisplayValues[CHANNEL_COUNT];
+bool lastDisplayValid[CHANNEL_COUNT] = {false, false, false, false, false};
 void read_pzem_channel(int channel, PZEMVAL &out)
 {
   mux.setChannel(channel);
@@ -90,8 +92,10 @@ void updateLastRelayStatus()
 void lcd_show(int channel) // Anh Danh viet
 {
 
+  bool channelChanged = last_channel != channel;
+
   if (lastDisplayValid[channel] &&
-      last_channel == channel &&
+      !channelChanged &&
       lastDisplayValues[channel].V == ch[channel].V &&
       lastDisplayValues[channel].I == ch[channel].I &&
       lastDisplayValues[channel].P == ch[channel].P)
@@ -99,10 +103,17 @@ void lcd_show(int channel) // Anh Danh viet
     return;
   }
 
+  if (channelChanged)
+  {
+    lcd.clear();
+  }
+
+  static const char *CHANNEL_LABELS[CHANNEL_COUNT] = {
+      "Total CH", "CH1", "CH2", "CH3", "CH4"};
+
   lcd.setCursor(0, 0);
-  lcd.print("CH ");
-  lcd.print(channel + 1);
-  lcd.print(": ");
+  lcd.print(CHANNEL_LABELS[channel]);
+  lcd.print(":");
 
   lcd.print(ch[channel].V, 0);
   lcd.print("V ");
@@ -279,7 +290,7 @@ void checkpulse2()
   case KY040::CLOCKWISE:
     encoderPos++;
 
-    if (encoderPos > 4)
+    if (encoderPos >= DISPLAY_SCREEN_COUNT) //(>4)
       encoderPos = 0;
     flag_encoderPos = encoderPos;
     Serial.print("Direction: ");
@@ -294,7 +305,7 @@ void checkpulse2()
   case KY040::COUNTERCLOCKWISE:
     encoderPos--;
     if (encoderPos < 0)
-      encoderPos = 4;
+      encoderPos = DISPLAY_SCREEN_COUNT - 1; // 4
     flag_encoderPos = encoderPos;
 
     Serial.print("Direction: ");
@@ -341,7 +352,7 @@ inline void lcdv2_begin()
   last_channel = -1;
   lastStateCLK = pinALast;
   last_channel = -1;
-  for (uint8_t i = 0; i < 4; ++i)
+  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) // 4
   {
     lastDisplayValid[i] = false;
     lastDisplayValues[i].V = 0;
@@ -356,23 +367,23 @@ inline void lcdv2_begin()
 
 inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
 {
-  checkpulse2(); // doc xung
-  if (flag_encoderPos < 4)
+  checkpulse2();                       // doc xung
+  if (flag_encoderPos < CHANNEL_COUNT) // 4
   {
     lcd_show(flag_encoderPos);
   }
-  else if (flag_encoderPos = 4)
+  else if (flag_encoderPos == CHANNEL_COUNT) // 4
   {
     lcdshowchannelstate(flag_encoderPos);
   }
   // lcd_show(flag_encoderPos);
 }
 
-inline void lcdv2_tick_standalone() // đọc ch[0..3] mỗi 500ms
+inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
 {
   if (lastReadMs <= millis())
   {
-    for (uint8_t i = 0; i < 4; i++)
+    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
     {
       read_pzem_channel(i, ch[i]);
     }
