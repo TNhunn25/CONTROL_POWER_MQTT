@@ -361,6 +361,13 @@ void setup()
     pinMode(ReadRelay[i], INPUT);
   }
   loadRelayStates();
+
+  // Khi khởi động ở chế độ AUTO, bật lại relay theo thứ tự tránh kích đồng thời
+  if (autoModeEnabled)
+  {
+    batRelayTheoThuTu();
+  }
+
   docNangLuongTuEEPROM();
   dongBoTrangThaiRelayTuPhanCung();
 }
@@ -753,8 +760,7 @@ void loadRelayStates()
     storedState = (storedState == 1) ? 1 : 0;
 
     relayStates[i] = storedState;
-    digitalWrite(Relay[i], storedState ? LOW : HIGH);
-    // Serial.println(relayStates[3]);
+
     uint8_t measurementIndex = i + 1;
     if (measurementIndex < MEASUREMENT_COUNT)
     {
