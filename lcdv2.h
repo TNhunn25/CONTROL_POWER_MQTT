@@ -11,7 +11,7 @@ String currentDir = "";
 unsigned long lastButtonPress = 0;
 
 #define CLK_PIN 47 // aka. A
-#define DT_PIN 48 // aka. B
+#define DT_PIN 48  // aka. B
 
 KY040 g_rotaryEncoder(CLK_PIN, DT_PIN);
 
@@ -50,9 +50,9 @@ typedef struct
   float V, I, P;
 } PZEMVAL;
 
-PZEMVAL ch[5]; // lưu dữ liệu cho 4 kênh
-PZEMVAL lastDisplayValues[5];
-bool lastDisplayValid[5] = {false, false, false, false, false};
+PZEMVAL ch[4]; // lưu dữ liệu cho 4 kênh
+PZEMVAL lastDisplayValues[4];
+bool lastDisplayValid[4] = {false, false, false, false};
 void read_pzem_channel(int channel, PZEMVAL &out)
 {
   mux.setChannel(channel);
@@ -71,11 +71,11 @@ bool relayStatusChanged()
   for (uint8_t i = 0; i < RELAY_COUNT; i++)
   {
     if (lastRelayStates[i] != relayStates[i])
-      ;
     {
       return true;
     }
   }
+  return false;
 }
 
 // Ham cap nhat trang thai relay duoc luu
@@ -357,7 +357,7 @@ inline void lcdv2_begin()
 inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
 {
   checkpulse2(); // doc xung
-  if(flag_encoderPos < 4 )
+  if (flag_encoderPos < 4)
   {
     lcd_show(flag_encoderPos);
   }
