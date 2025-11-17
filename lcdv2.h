@@ -107,7 +107,7 @@ void lcd_show(int channel) // Anh Danh viet
   lcd.print(ch[channel].V, 0);
   lcd.print("V ");
 
-  lcd.print(autoModeEnabled ? "AUTO " : "MAN");
+  lcd.print(autoModeEnabled ? "AUTO" : "MAN");
 
   lcd.setCursor(0, 1);
   lcd.print(ch[channel].I, 1);
@@ -127,7 +127,7 @@ void lcdshowchannelstate(int channel)
 {
   if (relayStatusChanged() || last_channel != channel)
   {
-    lcd.clear();
+    // lcd.clear();
     for (uint8_t i = 0; i < RELAY_COUNT; i++)
     {
       if (i == 0)

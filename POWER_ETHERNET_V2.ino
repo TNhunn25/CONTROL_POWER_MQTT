@@ -25,6 +25,7 @@ const char *mqtt_client_id = "DEMO_HG_QUANTRAC_2025";
 const char *topic_test_pub = "CRL_POWER/STATUS";
 const char *topic_cmd_sub = "CRL_POWER/command";
 const char *topic_ack_pub = "CRL_POWER/ACK";
+const char *topic_info = "CRL_POWER/INFO";
 
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
@@ -34,7 +35,7 @@ PubSubClient mqttClient(ethClient);
 char data_MQTT[100] = {0};
 
 // Định danh thiết bị và số lượng relay cần gửi trạng thái.
-const char *device_id = "CRL_POWER";
+const char *device_id = "CTRL_POWER";
 // const uint8_t RELAY_COUNT = 4;
 // MEASUREMENT_COUNT = 1 (kênh tổng) + số relay.
 const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
@@ -76,6 +77,9 @@ uint32_t sequenceCounters[RELAY_COUNT] = {0};
 // Khoảng thời gian gửi dữ liệu và hệ số đổi ra giờ.
 const unsigned long TELEMETRY_INTERVAL_MS = 30000UL;
 const unsigned long SENSOR_POLL_INTERVAL_MS = 1000UL;
+// thời gian chờ giữa các relay khi bật tuần tự (ms)
+const unsigned long TIME_CHO_MOI_KENH_MS = 3000UL;
+
 const int VOLTAGE_CHANGE_THRESHOLD = 1;       // Volt
 const float CURRENT_CHANGE_THRESHOLD = 0.05f; // Ampere
 const float ENERGY_CHANGE_THRESHOLD = 0.001f; // kWh
@@ -108,6 +112,7 @@ void loadRelayStates();
 void docNangLuongTuEEPROM();
 void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi);
 void dongBoTrangThaiRelayTuPhanCung();
+void batRelayTheoThuTu(); // MAN -> AUTO: bật lại relay theo thứ tự, dựa trên trạng thái đang lưu trong relayStates[]
 
 void callback(char *topic, byte *payload, unsigned int len)
 {
@@ -171,7 +176,7 @@ void callback(char *topic, byte *payload, unsigned int len)
         setRelayOutput(i, on);
         if (i + 1U < RELAY_COUNT)
         {
-          delay(3000);
+          delay(TIME_CHO_MOI_KENH_MS); // 3s
         }
       }
       publishRelayAck(s, true, on);
@@ -188,11 +193,21 @@ void reconnectMQTT()
   while (!mqttClient.connected())
   {
     Serial.println(F("MQTT connecting..."));
-    if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password,"CRL_POWER/INFO",1,1,"offline")) //connect(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage)
+
+    char willPayload[128];
+    snprintf(willPayload, sizeof(willPayload),
+             "{\"id\":\"%s\",\"status\":\"offline\"}", device_id);
+
+    if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password, topic_info, 1, 1, willPayload)) // connect(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage)
     {
       Serial.println(F("MQTT OK"));
       mqttClient.subscribe(topic_cmd_sub);
       clearRetainedCmd();
+
+      char onlinePayload[128];
+      snprintf(onlinePayload, sizeof(onlinePayload),
+               "{\"id\":\"%s\",\"status\":\"online\"}", device_id);
+      mqttClient.publish(topic_info, onlinePayload, true);
     }
 
     else
@@ -257,8 +272,8 @@ void read_pzem_tong()
 
   if (totalChanged)
   {
-  measurementDirty[0] = true;
-  telemetryDirty = true;
+    measurementDirty[0] = true;
+    telemetryDirty = true;
   }
 
   // dữ liệu cho LCD
@@ -309,7 +324,6 @@ void setup()
   mqttClient.subscribe(topic_cmd_sub, 1); // subscribe (topic, [qos])
   clearRetainedCmd();
 
-
   pinMode(Auto, INPUT_PULLUP);
   pinMode(Man, INPUT_PULLUP);
 
@@ -359,7 +373,7 @@ void loop()
   mqttClient.loop();
 
   unsigned long now = millis();
-  if( millis()- setupTime > 5000)
+  if (millis() - setupTime > 5000)
   {
     lcdv2_tick_display();
   }
@@ -367,7 +381,7 @@ void loop()
   if (now - lastSensorPollMs >= SENSOR_POLL_INTERVAL_MS)
   {
     lastSensorPollMs = now;
-    
+
     if (timeout_readpzem <= millis())
     {
       for (uint8_t i = 0; i < RELAY_COUNT; i++)
@@ -385,7 +399,8 @@ void loop()
   bool manActive = (digitalRead(Man) == HIGH);
   bool autoActive = (digitalRead(Auto) == HIGH);
 
-  bool curAuto = lastAuto; // giữ nguyên nếu mơ hồ
+  // Xác định chế độ hiện tại từ 2 input MAN/AUTO
+  bool curAuto = lastAuto;
   if (manActive && !autoActive)
   {
     curAuto = false; // MAN
@@ -395,6 +410,7 @@ void loop()
     curAuto = true; // AUTO
   }
 
+  // Nếu có thay đổi chế độ
   if (curAuto != lastAuto)
   {
     autoModeEnabled = curAuto;
@@ -412,7 +428,12 @@ void loop()
       }
       telemetryDirty = true;
     }
+    else
+    {
+      batRelayTheoThuTu(); // Man -> auto bật lại relay theo thứ tự, tránh khởi động đồng thời
+    }
 
+    // Cập nhật lại telemetry
     for (uint8_t i = 1; i < MEASUREMENT_COUNT; ++i)
       measurementDirty[i] = true;
     telemetryDirty = true;
@@ -420,6 +441,7 @@ void loop()
     lastAuto = curAuto;
   }
 
+  // Khi dang ở Man: đọc trạng thái thực tế từ công tắc để sync vào mạch
   if (!autoModeEnabled)
   {
     dongBoTrangThaiRelayTuPhanCung();
@@ -822,3 +844,30 @@ void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi)
   nangLuongDaLuu[chiSo] = giaTriMoi;
 }
 
+// Khi chuyển từ MAN sang AUTO:
+// - Dựa trên mảng relayStates[] (đã được cập nhật trong MAN)
+// - Tắt hết relay trên MCU
+// - Sau đó bật lại từng kênh có trạng thái 1 theo thứ tự với độ trễ cố định
+void batRelayTheoThuTu()
+{
+  // 1) Tắt tất cả relay trên MCU trước (đảm bảo không bật đồng thời)
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    digitalWrite(Relay[i], HIGH); // HIGH = OFF (theo logic hiện tại của bạn)
+  }
+
+  // 2) Bật lại từng kênh đang được đánh dấu ON trong relayStates[]
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    if (relayStates[i])
+    {
+      digitalWrite(Relay[i], LOW); // LOW = ON
+
+      // Nếu chưa phải kênh cuối, chờ trước khi bật kênh tiếp theo
+      if (i + 1U < RELAY_COUNT)
+      {
+        delay(TIME_CHO_MOI_KENH_MS);
+      }
+    }
+  }
+}
