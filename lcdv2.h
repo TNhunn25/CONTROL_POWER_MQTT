@@ -109,7 +109,7 @@ void lcd_show(int channel) // Anh Danh viet
   }
 
   static const char *CHANNEL_LABELS[CHANNEL_COUNT] = {
-      "Total CH", "CH1", "CH2", "CH3", "CH4"};
+      "Total", "CH1", "CH2", "CH3", "CH4"};
 
   lcd.setCursor(0, 0);
   lcd.print(CHANNEL_LABELS[channel]);
