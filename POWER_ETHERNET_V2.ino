@@ -20,11 +20,12 @@ const char *mqtt_server = "mqtt.dev.altasoftware.vn";
 const int mqtt_port = 1883;
 const char *mqtt_user = "altamedia";
 const char *mqtt_password = "Altamedia@%";
-const char *mqtt_client_id = "DEMO_HG_QUANTRAC_2025";
+const char *mqtt_client_id = "DEMO_CONTROL_POWER_2025";
 
 const char *topic_test_pub = "CRL_POWER/STATUS";
 const char *topic_cmd_sub = "CRL_POWER/command";
 const char *topic_ack_pub = "CRL_POWER/ACK";
+const char *topic_info = "CRL_POWER/INFO";
 
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
@@ -34,8 +35,8 @@ PubSubClient mqttClient(ethClient);
 char data_MQTT[100] = {0};
 
 // Định danh thiết bị và số lượng relay cần gửi trạng thái.
-const char *device_id = "CRL_POWER_01";
-const uint8_t RELAY_COUNT = 4;
+const char *device_id = "CONTROL_POWER";
+// const uint8_t RELAY_COUNT = 4;
 // MEASUREMENT_COUNT = 1 (kênh tổng) + số relay.
 const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
 
@@ -48,9 +49,9 @@ const int EEPROM_ENERGY_SIGNATURE_ADDR = EEPROM_ENERGY_BASE_ADDR + (MEASUREMENT_
 const uint8_t EEPROM_ENERGY_SIGNATURE = 0x5A;
 const float NGUONG_LUU_NANG_LUONG = 0.01f; // kWh
 
-//----------------
-const int Auto = 30; // doc trang thai auto man
-const int Man = 31;
+// //----------------
+// const int Auto = 30; // doc trang thai auto man
+// const int Man = 31;
 const int Den_Auto_Man = 13;
 int den = 0;
 //----------------
@@ -64,7 +65,7 @@ int vitrirelay = 0;
 //-------------------
 
 // Trạng thái xuất relay và số liệu đo mô phỏng.
-int relayStates[RELAY_COUNT] = {0};
+// int relayStates[RELAY_COUNT] = {0};
 int voltages[MEASUREMENT_COUNT] = {0};
 float currents[MEASUREMENT_COUNT] = {0.0f};
 float energies[MEASUREMENT_COUNT] = {0.0f};
@@ -76,11 +77,14 @@ uint32_t sequenceCounters[RELAY_COUNT] = {0};
 // Khoảng thời gian gửi dữ liệu và hệ số đổi ra giờ.
 const unsigned long TELEMETRY_INTERVAL_MS = 30000UL;
 const unsigned long SENSOR_POLL_INTERVAL_MS = 1000UL;
+// thời gian chờ giữa các relay khi bật tuần tự (ms)
+const unsigned long TIME_CHO_MOI_KENH_MS = 3000UL;
+
 const int VOLTAGE_CHANGE_THRESHOLD = 1;       // Volt
 const float CURRENT_CHANGE_THRESHOLD = 0.05f; // Ampere
 const float ENERGY_CHANGE_THRESHOLD = 0.001f; // kWh
 
-unsigned long lastTelemetryMs = 0;
+// unsigned long lastTelemetryMs = 0;
 unsigned long lastSensorPollMs = 0;
 bool telemetryDirty = false;
 uint32_t ackSequence = 0;
@@ -93,7 +97,10 @@ int lastPublishedVoltages[MEASUREMENT_COUNT] = {0};
 float lastPublishedCurrents[MEASUREMENT_COUNT] = {0.0f};
 float lastPublishedEnergies[MEASUREMENT_COUNT] = {0.0f};
 unsigned long lastMeasurementUpdateMs[MEASUREMENT_COUNT] = {0};
-bool autoModeEnabled = true;
+// bool autoModeEnabled = true;
+// bool autoModeEnabled;
+
+unsigned long setupTime = 0;
 
 // Khai báo trước các hàm phục vụ việc đọc và phát số liệu.
 void read_pzem(uint8_t channel);
@@ -104,6 +111,8 @@ void publishRelayAck(const char *outputLabel, bool success, bool onState);
 void loadRelayStates();
 void docNangLuongTuEEPROM();
 void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi);
+void dongBoTrangThaiRelayTuPhanCung();
+void batRelayTheoThuTu(); // MAN -> AUTO: bật lại relay theo thứ tự, dựa trên trạng thái đang lưu trong relayStates[]
 
 void callback(char *topic, byte *payload, unsigned int len)
 {
@@ -133,6 +142,17 @@ void callback(char *topic, byte *payload, unsigned int len)
     int ch = atoi(s);              // lấy số kênh 1..4
     bool on = false;
 
+    // ===== KHÓA LỆNH KHI ĐANG MAN =====
+    if (!autoModeEnabled)
+    { // đang ở MAN -> không cho điều khiển từ xa
+      bool cur = false;
+      if (ch >= 1 && ch <= RELAY_COUNT)
+        cur = (relayStates[ch - 1] == 1);
+      publishRelayAck(s, false, cur); // báo FAIL, giữ nguyên trạng thái hiện tại
+      return;                         // THOÁT SỚM, KHÔNG setRelayOutput
+    }
+    // ==================================
+
     // ưu tiên đọc STATE nếu có
     if (doc["STATE"].is<const char *>())
     {
@@ -156,7 +176,7 @@ void callback(char *topic, byte *payload, unsigned int len)
         setRelayOutput(i, on);
         if (i + 1U < RELAY_COUNT)
         {
-          delay(3000);
+          delay(TIME_CHO_MOI_KENH_MS); // 3s
         }
       }
       publishRelayAck(s, true, on);
@@ -168,40 +188,56 @@ void callback(char *topic, byte *payload, unsigned int len)
   }
 }
 
-// Lấy BUTTON dưới dạng số nguyên.
-// ArduinoJson tự chuyển "1" (chuỗi) hoặc 1 (số) thành int.
-// int btn = doc["OUTPUT"].as<int>();
-
-// Serial.print(F("[MQTT] OUTPUT="));
-// Serial.println(btn);
-
-// if (btn == 1)
-// {
-//   digitalWrite(Relay[0], 0);
-// }
-// else if (btn == 0)
-// {
-//   digitalWrite(Relay[0], 1);
-// }
-// }
-
 void reconnectMQTT()
 {
-  while (!mqttClient.connected())
+  // Thời gian giữa 2 lần thử reconnect
+  const unsigned long RECONNECT_INTERVAL_MS = 5000;
+  static unsigned long lastReconnectAttempt = 0;
+
+  // Nếu đang connected rồi thì thôi
+  if (mqttClient.connected())
+    return;
+
+  unsigned long now = millis();
+
+  // Chưa tới lúc thử lại thì return, tránh block loop()
+  if (now - lastReconnectAttempt < RECONNECT_INTERVAL_MS)
+    return;
+
+  lastReconnectAttempt = now;
+
+  // Nếu lib Ethernet hỗ trợ check link, dùng luôn (nếu không có macro này thì bỏ #ifdef/#endif cũng được)
+#ifdef ETHERNET_HAS_READLINKSTATUS
+  if (Ethernet.linkStatus() == LinkOFF)
   {
-    Serial.println(F("MQTT connecting..."));
-    if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password))
-    {
-      Serial.println(F("MQTT OK"));
-      mqttClient.subscribe(topic_cmd_sub);
-    }
-    else
-    {
-      Serial.print(F("MQTT fail (state="));
-      Serial.print(mqttClient.state());
-      Serial.println(F(") retry..."));
-      delay(2000);
-    }
+    Serial.println(F("Ethernet link DOWN, skip MQTT reconnect"));
+    return;
+  }
+#endif
+
+  Serial.println(F("MQTT connecting..."));
+
+  char willPayload[128];
+  snprintf(willPayload, sizeof(willPayload),
+           "{\"id\":\"%s\",\"status\":\"offline\"}", device_id);
+
+  if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password, topic_info, 1, 1, willPayload))
+  {
+    Serial.println(F("MQTT OK"));
+    mqttClient.subscribe(topic_cmd_sub);
+    clearRetainedCmd();
+
+    char onlinePayload[128];
+    snprintf(onlinePayload, sizeof(onlinePayload),
+             "{\"id\":\"%s\",\"status\":\"online\"}", device_id);
+    mqttClient.publish(topic_info, onlinePayload, true);
+  }
+  else
+  {
+    Serial.print(F("MQTT fail (state="));
+    Serial.print(mqttClient.state());
+    Serial.println(F(") will retry later..."));
+    // KHÔNG delay ở đây nữa, trả quyền lại cho loop()
   }
 }
 
@@ -218,22 +254,82 @@ void reconnectMQTT()
 #endif
 // Nếu EN đã kéo GND cứng: KHÔNG truyền enablePin (instance mux nằm trong lcdv2.h)
 
-// Nếu bạn muốn điều khiển EN bằng 1 chân ví dụ D24:
-// #define MUX_EN 24
-// HC4052 mux(MUX_A, MUX_B, MUX_EN);  // nhớ nối EN của IC vào D24 (KHÔNG kéo GND)
-
 #ifndef UART_PZEM
 #define UART_PZEM Serial3
 #endif
+
+#ifndef UART_PZEM_TONG
+#define UART_PZEM_TONG Serial2
+#endif
+Hshopvn_Pzem004t_V2 pzemTong(&UART_PZEM_TONG);
+
+void read_pzem_tong()
+{
+  float sumA = 0.0f, sumKwh = 0.0f;
+  int vmax = 0;
+  for (uint8_t i = 1; i <= RELAY_COUNT; ++i)
+  {
+    sumA += currents[i];
+    sumKwh += energies[i];
+    if (voltages[i] > vmax)
+      vmax = voltages[i];
+  }
+
+  // Tính tổng mới
+  int v0_new = vmax;
+  float i0_new = sumA;
+  float e0_new = sumKwh;
+
+  // Cập nhật bộ đệm
+  voltages[0] = v0_new;
+  currents[0] = i0_new;
+  energies[0] = e0_new;
+
+  // CHỈ đánh dấu dirty khi thay đổi vượt ngưỡng
+  bool totalChanged =
+      (abs(v0_new - lastPublishedVoltages[0]) >= VOLTAGE_CHANGE_THRESHOLD) ||
+      (fabsf(i0_new - lastPublishedCurrents[0]) >= CURRENT_CHANGE_THRESHOLD) ||
+      (fabsf(e0_new - lastPublishedEnergies[0]) >= ENERGY_CHANGE_THRESHOLD);
+
+  if (totalChanged)
+  {
+    measurementDirty[0] = true;
+    telemetryDirty = true;
+  }
+
+  // dữ liệu cho LCD
+  if ((sizeof(ch) / sizeof(ch[0])) > 0)
+  {
+    ch[0].V = v0_new;
+    ch[0].I = i0_new;
+    ch[0].P = e0_new; // kWh
+  }
+}
+
 //------------------------------------------
+
+// Gọi sau khi subscribe để xóa mọi lệnh còn retain
+static void clearRetainedCmd()
+{
+  // PubSubClient overload: publish(topic, payload, length, retained)
+  mqttClient.publish(topic_cmd_sub, (const uint8_t *)"", 0, true);
+}
 
 void setup()
 {
   Serial.begin(9600);
   delay(100);
+  lcdv2_begin();
+  lcd.setCursor(0, 0);
+  setupTime = millis();
   Serial.println(F("\n[SYS] Booting POWER_ETHERNET_V2"));
   Ethernet.init(53);
   UART_PZEM.begin(9600);
+
+  UART_PZEM_TONG.begin(9600);
+  pzemTong.begin();
+  pzemTong.setTimeout(100);
+
   Ethernet.begin(mac, ip, dns, gateway, subnet);
   pzem.begin(); // PZEM V2 không setAddress, MUX để cô lập từng con
   Serial.println(F("PZEM-004T V2 + 74HC4052 + HC4052 lib"));
@@ -247,12 +343,32 @@ void setup()
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(callback);
   mqttClient.subscribe(topic_cmd_sub, 1); // subscribe (topic, [qos])
-
-  lcdv2_begin();
+  clearRetainedCmd();
 
   pinMode(Auto, INPUT_PULLUP);
   pinMode(Man, INPUT_PULLUP);
+
+  // pinMode(Auto, INPUT); // công tắc cấp Vcc khi chọn
+  // pinMode(Man, INPUT);  // MAN = HIGH
   pinMode(Den_Auto_Man, OUTPUT);
+
+  //----------------------------
+  bool manActive = (digitalRead(Man) == HIGH);   // chân 31
+  bool autoActive = (digitalRead(Auto) == HIGH); // chân 30
+
+  if (manActive && !autoActive)
+    autoModeEnabled = false; // MAN
+  else if (autoActive && !manActive)
+    autoModeEnabled = true; // AUTO
+  else
+    autoModeEnabled = true; // mơ hồ -> mặc định AUTO
+
+  digitalWrite(Den_Auto_Man, autoModeEnabled ? LOW : HIGH); // LED bật khi MAN
+  for (uint8_t i = 1; i < MEASUREMENT_COUNT; ++i)
+    measurementDirty[i] = true;
+  telemetryDirty = true;
+  nextPublishChannel = 0;
+  //----------------------------
 
   sorelay = sizeof(Relay);
   for (int i = 0; i < sorelay; i++)
@@ -266,65 +382,133 @@ void setup()
     pinMode(ReadRelay[i], INPUT);
   }
   loadRelayStates();
+
+  // Khi khởi động ở chế độ AUTO, bật lại relay theo thứ tự tránh kích đồng thời
+  if (autoModeEnabled)
+  {
+    batRelayTheoThuTu();
+  }
+
   docNangLuongTuEEPROM();
+  dongBoTrangThaiRelayTuPhanCung();
 }
 
 // Vòng lặp chính
 void loop()
 {
-  if (!mqttClient.connected())
-    reconnectMQTT();
-  mqttClient.loop();
-
   unsigned long now = millis();
+  if (!mqttClient.connected())
+  {
+    reconnectMQTT();
+  }
+  else
+  {
+    mqttClient.loop();
+  }
 
-  lcdv2_tick_display();
+  if (millis() - setupTime > 5000)
+  {
+    lcdv2_tick_display();
+  }
 
   if (now - lastSensorPollMs >= SENSOR_POLL_INTERVAL_MS)
   {
     lastSensorPollMs = now;
 
-    for (uint8_t i = 0; i < RELAY_COUNT; i++)
+    if (timeout_readpzem <= millis())
     {
-      // Đọc từng kênh PZEM
-      read_pzem(i);
-      delay(50);
+      for (uint8_t i = 0; i < RELAY_COUNT; i++)
+      {
+        // Đọc từng kênh PZEM
+        read_pzem(i);
+      }
     }
+    read_pzem_tong();
   }
+
+  //------------------------------------
+  static bool lastAuto = autoModeEnabled;
+
+  bool manActive = (digitalRead(Man) == HIGH);
+  bool autoActive = (digitalRead(Auto) == HIGH);
+
+  // Xác định chế độ hiện tại từ 2 input MAN/AUTO
+  bool curAuto = lastAuto;
+  if (manActive && !autoActive)
+  {
+    curAuto = false; // MAN
+  }
+  else if (autoActive && !manActive)
+  {
+    curAuto = true; // AUTO
+  }
+
+  // Nếu có thay đổi chế độ
+  if (curAuto != lastAuto)
+  {
+    autoModeEnabled = curAuto;
+    digitalWrite(Den_Auto_Man, curAuto ? LOW : HIGH); // LED bật khi MAN
+
+    // AUTO -> MAN: lưu nguyên trạng thái hiện tại của các kênh xuống EEPROM
+    if (!curAuto)
+    {
+      for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+      {
+        EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, (uint8_t)relayStates[i]);
+        uint8_t measurementIndex = i + 1;
+        if (measurementIndex < MEASUREMENT_COUNT)
+          measurementDirty[measurementIndex] = true;
+      }
+      telemetryDirty = true;
+    }
+    else
+    {
+      batRelayTheoThuTu(); // Man -> auto bật lại relay theo thứ tự, tránh khởi động đồng thời
+    }
+
+    // Cập nhật lại telemetry
+    for (uint8_t i = 1; i < MEASUREMENT_COUNT; ++i)
+      measurementDirty[i] = true;
+    telemetryDirty = true;
+    nextPublishChannel = 0;
+    lastAuto = curAuto;
+  }
+
+  // Khi dang ở Man: đọc trạng thái thực tế từ công tắc để sync vào mạch
+  if (!autoModeEnabled)
+  {
+    dongBoTrangThaiRelayTuPhanCung();
+  }
+  //------------------------------------
 
   bool timeToPublish = (now - lastTelemetryMs) >= TELEMETRY_INTERVAL_MS;
 
   if (timeToPublish || telemetryDirty)
   {
-    if (digitalRead(31) == 1)
-    {
-      return;
-    }
     publishMeasurements(timeToPublish);
-    lastTelemetryMs = now;
-    // telemetryDirty = false;
+    if (timeToPublish)
+    {
+      lastTelemetryMs = now;
+    }
   }
-
-  Serial.println("--------------------");
-  delay(1000);
 }
 
-// ===== GIỮ LẠI DUY NHẤT HÀM NÀY =====
+// Thêm 2 macro ở đầu file (hoặc ngay trên read_pzem):
+#define V_MIN_ENERGY 90    // chỉ tính kWh khi V ≥ 90V
+#define I_MIN_ENERGY 0.03f // và I ≥ 0.03A (tùy phần cứng)
+
 void read_pzem(uint8_t channel)
-{                                         // channel: 0..(RELAY_COUNT-1) cho 4052
-  uint8_t measurementIndex = channel + 1; // 0 = tổng, 1..N = từng kênh
+{
+  uint8_t measurementIndex = channel + 1;
   if (measurementIndex >= MEASUREMENT_COUNT)
     return;
 
   unsigned long now = millis();
 
-  // Chọn ngõ 4052 tương ứng (lib HC4052 dùng 0..3)
   mux.setChannel(channel);
   delay(80);
-  // Đọc PZEM
   pzem_info d = pzem.getData();
 
-  // Cập nhật buffer để publish JSON
   if (d.volt >= 0 && d.volt < 260)
     voltages[measurementIndex] = d.volt;
   if (d.ampe >= 0)
@@ -333,92 +517,90 @@ void read_pzem(uint8_t channel)
   if (lastMeasurementUpdateMs[measurementIndex] != 0)
   {
     unsigned long elapsedMs = now - lastMeasurementUpdateMs[measurementIndex];
-    energies[measurementIndex] += (voltages[measurementIndex] * currents[measurementIndex]) / 1000.0f * ((float)elapsedMs / 3600000.0f);
+
+    // === chống nhiễu tích phân năng lượng
+    float vEff = (voltages[measurementIndex] >= V_MIN_ENERGY) ? (float)voltages[measurementIndex] : 0.0f;
+    float iEff = (currents[measurementIndex] >= I_MIN_ENERGY) ? currents[measurementIndex] : 0.0f;
+
+    // Wh = V*A*h ; kWh = Wh/1000
+    energies[measurementIndex] += (vEff * iEff) / 1000.0f * ((float)elapsedMs / 3600000.0f);
+    if (!isfinite(energies[measurementIndex]) || energies[measurementIndex] < 0.0f)
+      energies[measurementIndex] = 0.0f;
   }
   lastMeasurementUpdateMs[measurementIndex] = now;
 
+  // === dữ liệu cho LCD: V, I, kWh (round 3 số để không rung)
+
   if (channel < (sizeof(ch) / sizeof(ch[0])))
   {
-    ch[channel].V = voltages[measurementIndex];
-    ch[channel].I = currents[measurementIndex];
-    ch[channel].P = d.power;
+    uint8_t displayIndex = channel + 1; // ch[0] dành cho kênh tổng
+    if (displayIndex < CHANNEL_COUNT)
+    {
+      ch[displayIndex].V = voltages[measurementIndex];
+      ch[displayIndex].I = currents[measurementIndex];
+
+      float kwh_disp = energies[measurementIndex];
+      kwh_disp = floorf(kwh_disp * 1000.0f + 0.5f) / 1000.0f; // round về 0.001 kWh
+      ch[displayIndex].P = kwh_disp;                          // LCD sẽ in kWh từ ch[displayIndex].P
+    }
   }
 
   luuNangLuongVaoEEPROM(measurementIndex, energies[measurementIndex]);
 
   bool channelDirty = false;
-
   if (abs(voltages[measurementIndex] - lastPublishedVoltages[measurementIndex]) >= VOLTAGE_CHANGE_THRESHOLD)
-  {
     channelDirty = true;
-  }
-
   if (fabsf(currents[measurementIndex] - lastPublishedCurrents[measurementIndex]) >= CURRENT_CHANGE_THRESHOLD)
-  {
     channelDirty = true;
-  }
-
   if (fabsf(energies[measurementIndex] - lastPublishedEnergies[measurementIndex]) >= ENERGY_CHANGE_THRESHOLD)
-  {
     channelDirty = true;
-  }
 
   if (channelDirty)
   {
-    // if (digitalRead(31) == 0)
-    // {
-    //   return;
-    // }
-
-    // đánh dấu riêng từng kênh thay đổi ====
-    // Khi chỉ một output thay đổi, chỉ kênh đó được publish ngay.
     measurementDirty[measurementIndex] = true;
     telemetryDirty = true;
   }
 
-  // (tuỳ) debug
-  Serial.print("CH");
-  Serial.print(channel);
-  Serial.print(" | V=");
-  Serial.print(voltages[measurementIndex]);
-  Serial.print(" I=");
-  Serial.print(currents[measurementIndex], 3);
-  Serial.print(" kWh=");
-  Serial.println(energies[measurementIndex], 3);
+  // debug
+  // Serial.print("CH");
+  // Serial.print(channel);
+  // Serial.print(" | V=");
+  // Serial.print(voltages[measurementIndex]);
+  // Serial.print(" I=");
+  // Serial.print(currents[measurementIndex], 3);
+  // Serial.print(" kWh=");
+  // Serial.println(energies[measurementIndex], 3);
 }
 
+// Dùng để đẩy gói tin lên MQTT
 void publishMeasurements(bool publishAll)
 {
   if (publishAll)
   {
-    for (uint8_t channel = 0; channel < RELAY_COUNT; ++channel)
+    // Đánh dấu tất cả kênh 0..MEASUREMENT_COUNT-1 là bẩn
+    for (uint8_t i = 0; i < MEASUREMENT_COUNT; ++i)
     {
-      uint8_t measurementIndex = channel + 1;
-      if (measurementIndex < MEASUREMENT_COUNT)
-      {
-        measurementDirty[measurementIndex] = true;
-      }
+      measurementDirty[i] = true;
     }
     telemetryDirty = true;
     nextPublishChannel = 0;
   }
 
-  // Thời điểm đo dùng làm trường Time trong payload.
-  unsigned long timestamp = provideTimestamp();
+  unsigned long timestamp = provideTimestamp(); // thời điểm đo dùng cho payload
+
+  // ===== PUBLISH CÁC KÊNH 1..RELAY_COUNT TRƯỚC =====
+  uint8_t startChannel = nextPublishChannel;
+  bool publishedAny = false;
+  uint8_t lastPublishedChannel = nextPublishChannel;
 
   for (uint8_t attempt = 0; attempt < RELAY_COUNT; ++attempt)
   {
-    uint8_t channel = (nextPublishChannel + attempt) % RELAY_COUNT;
-    uint8_t measurementIndex = channel + 1;
+    uint8_t channel = (startChannel + attempt) % RELAY_COUNT; // 0..RELAY_COUNT-1
+    uint8_t measurementIndex = channel + 1;                   // 1..MEASUREMENT_COUNT-1
     if (measurementIndex >= MEASUREMENT_COUNT)
-    {
       continue;
-    }
-
     if (!measurementDirty[measurementIndex])
-    {
       continue;
-    }
 
     char payload[256];
     uint32_t seq = ++sequenceCounters[channel];
@@ -427,7 +609,8 @@ void publishMeasurements(bool publishAll)
     if (powerJsonBuildAutoPayload(device_id,
                                   measurementIndex,
                                   autoModeEnabled ? "AUTO" : "MAN",
-                                  relayStates[channel] == HIGH ? 1 : 0,
+                                  // relayStates[channel] == HIGH ? 1 : 0,
+                                  relayStates[channel] ? 1 : 0,
                                   voltages[measurementIndex],
                                   currents[measurementIndex],
                                   energies[measurementIndex],
@@ -436,21 +619,78 @@ void publishMeasurements(bool publishAll)
                                   payload,
                                   sizeof(payload)))
     {
-      mqttClient.publish(topic_test_pub, (const uint8_t *)payload, strlen(payload), false);
-      Serial.print("[MQTT] TX: ");
-      Serial.println(payload);
-      Serial.print("[MQTT] KEY: ");
-      Serial.println(data_MQTT);
+      if (ui32_timeout_mqtt <= millis())
+      {
+        mqttClient.publish(topic_test_pub, (const uint8_t *)payload, strlen(payload), false);
+        // Serial.print("[MQTT] TX: ");
+        // Serial.println(payload);
+        // Serial.print("[MQTT] KEY: ");
+        // Serial.println(data_MQTT);
+      }
 
       lastPublishedVoltages[measurementIndex] = voltages[measurementIndex];
       lastPublishedCurrents[measurementIndex] = currents[measurementIndex];
       lastPublishedEnergies[measurementIndex] = energies[measurementIndex];
       measurementDirty[measurementIndex] = false;
-      nextPublishChannel = (channel + 1) % RELAY_COUNT;
-      break;
+
+      publishedAny = true;
+      lastPublishedChannel = channel;
     }
   }
 
+  if (publishedAny)
+  {
+    nextPublishChannel = (lastPublishedChannel + 1) % RELAY_COUNT;
+  }
+
+  // ===== SAU KHI 4 KÊNH TRÊN GỬI XONG MỚI GỬI KÊNH TỔNG (index = 0) =====
+  static uint32_t seq_total = 0;
+  if (measurementDirty[0])
+  {
+    // Status tổng: 1 nếu có ít nhất một kênh con đang ON (giữ nguyên logic cũ)
+    int totalStatus = 0;
+    for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+    {
+      if (relayStates[i])
+      {
+        totalStatus = 1;
+        break;
+      }
+    }
+
+    char payload[256];
+    if (powerJsonBuildAutoPayload(device_id,
+                                  0, // Channel Tổng
+                                  autoModeEnabled ? "AUTO" : "MAN",
+                                  totalStatus, // nếu muốn bỏ Status, truyền -1
+                                  voltages[0],
+                                  currents[0],
+                                  energies[0],
+                                  ++seq_total,
+                                  timestamp,
+                                  payload,
+                                  sizeof(payload)))
+    {
+
+      // --- Đổi Channel 0 -> "Tong"---
+      if (ui32_timeout_mqtt <= millis())
+      {
+        mqttClient.publish(topic_test_pub, (const uint8_t *)payload, strlen(payload), false);
+        Serial.print("[MQTT] TX: ");
+        Serial.println(payload);
+        Serial.print("[MQTT] KEY: ");
+        Serial.println(data_MQTT);
+      }
+
+      lastPublishedVoltages[0] = voltages[0];
+      lastPublishedCurrents[0] = currents[0];
+      lastPublishedEnergies[0] = energies[0];
+      measurementDirty[0] = false;
+    }
+  }
+  // ===== HẾT PHẦN TỔNG =====
+
+  // Cập nhật cờ telemetryDirty dựa trên việc còn kênh nào bẩn hay không
   telemetryDirty = false;
   for (size_t i = 0; i < MEASUREMENT_COUNT; ++i)
   {
@@ -490,9 +730,19 @@ void setRelayOutput(uint8_t channelIndex, bool on)
 void publishRelayAck(const char *outputLabel, bool success, bool onState)
 {
   StaticJsonDocument<128> ackDoc;
-  ackDoc["Channel"] = (outputLabel != nullptr) ? outputLabel : "";
+  char label[32];
+  strncpy(label, outputLabel ? outputLabel : "", sizeof(label) - 1);
+  label[sizeof(label) - 1] = '\0';
+  char *p = strchr(label, ','); // cắt ", ON/OFF"
+  if (p)
+  {
+    *p = '\0';
+  }
+
+  ackDoc["Channel"] = label;
   ackDoc["Result"] = success ? "OK" : "FAIL";
   ackDoc["Status"] = success ? (onState ? "ON" : "OFF") : "UNKNOWN";
+  ackDoc["Mode"] = autoModeEnabled ? "AUTO" : "MAN";
   ackDoc["Seq"] = ++ackSequence;
   ackDoc["Time"] = provideTimestamp();
 
@@ -515,7 +765,7 @@ void publishRelayAck(const char *outputLabel, bool success, bool onState)
 unsigned long provideTimestamp()
 {
   // Với demo, sử dụng millis()/1000 làm timestamp dạng giây.
-  return millis() / 100UL;
+  return millis() / 200UL;
 }
 
 void loadRelayStates()
@@ -523,10 +773,10 @@ void loadRelayStates()
   bool signatureValid = (EEPROM.read(EEPROM_SIGNATURE_ADDR) == EEPROM_SIGNATURE);
   if (!signatureValid)
   {
-    EEPROM.update(EEPROM_SIGNATURE_ADDR, EEPROM_SIGNATURE);
+    EEPROM.write(EEPROM_SIGNATURE_ADDR, EEPROM_SIGNATURE);
     for (uint8_t i = 0; i < RELAY_COUNT; ++i)
     {
-      EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, static_cast<uint8_t>(0));
+      EEPROM.write(EEPROM_RELAY_BASE_ADDR + i, static_cast<uint8_t>(0));
     }
   }
 
@@ -536,7 +786,6 @@ void loadRelayStates()
     storedState = (storedState == 1) ? 1 : 0;
 
     relayStates[i] = storedState;
-    digitalWrite(Relay[i], storedState ? LOW : HIGH);
 
     uint8_t measurementIndex = i + 1;
     if (measurementIndex < MEASUREMENT_COUNT)
@@ -546,6 +795,39 @@ void loadRelayStates()
   }
 
   telemetryDirty = true;
+}
+
+void dongBoTrangThaiRelayTuPhanCung()
+{
+  // Đọc trạng thái thực tế của relay (MAN) và cập nhật biến phần mềm cho đúng.
+  bool anyChanged = false;
+
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    int actualState = (digitalRead(ReadRelay[i]) == LOW) ? 0 : 1;
+
+    if (relayStates[i] != actualState)
+    {
+      // CẬP NHẬT BỘ NHỚ CHẠY
+      relayStates[i] = actualState;
+
+      // GHI EEPROM NGAY ĐỂ LƯU "CHẾ ĐỘ CUỐI CÙNG" (kể cả MAN)
+      EEPROM.update(EEPROM_RELAY_BASE_ADDR + i, static_cast<uint8_t>(actualState));
+
+      // Đánh dấu kênh thay đổi để publish
+      uint8_t measurementIndex = i + 1;
+      if (measurementIndex < MEASUREMENT_COUNT)
+      {
+        measurementDirty[measurementIndex] = true;
+      }
+      anyChanged = true;
+    }
+  }
+
+  if (anyChanged)
+  {
+    telemetryDirty = true;
+  }
 }
 
 void docNangLuongTuEEPROM()
@@ -597,4 +879,32 @@ void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi)
 
   EEPROM.put(EEPROM_ENERGY_BASE_ADDR + (chiSo * sizeof(float)), giaTriMoi);
   nangLuongDaLuu[chiSo] = giaTriMoi;
+}
+
+// Khi chuyển từ MAN sang AUTO:
+// - Dựa trên mảng relayStates[] (đã được cập nhật trong MAN)
+// - Tắt hết relay trên MCU
+// - Sau đó bật lại từng kênh có trạng thái 1 theo thứ tự với độ trễ cố định
+void batRelayTheoThuTu()
+{
+  // 1) Tắt tất cả relay trên MCU trước (đảm bảo không bật đồng thời)
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    digitalWrite(Relay[i], HIGH); // HIGH = OFF (theo logic hiện tại của bạn)
+  }
+
+  // 2) Bật lại từng kênh đang được đánh dấu ON trong relayStates[]
+  for (uint8_t i = 0; i < RELAY_COUNT; ++i)
+  {
+    if (relayStates[i])
+    {
+      digitalWrite(Relay[i], LOW); // LOW = ON
+
+      // Nếu chưa phải kênh cuối, chờ trước khi bật kênh tiếp theo
+      if (i + 1U < RELAY_COUNT)
+      {
+        delay(TIME_CHO_MOI_KENH_MS);
+      }
+    }
+  }
 }
