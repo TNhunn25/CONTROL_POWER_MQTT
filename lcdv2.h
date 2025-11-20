@@ -1,8 +1,16 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <Ethernet.h>
 #include "HC4052.h"
 #include "Hshopvn_Pzem004t_V2.h"
 #include <KY040.h>
+
+extern IPAddress ip;
+extern IPAddress gateway;
+extern IPAddress subnet;
+extern IPAddress dns;
+extern const char *mqtt_server;
+extern const int mqtt_port;
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 int currentStateCLK;
@@ -64,6 +72,7 @@ UiMode uiMode = UI_MODE_VIEW;
 int menuIndex = 0;
 const int MAIN_MENU_ITEMS = 4;
 int netFieldIndex = 0;
+const int NET_MENU_ITEMS = 5; // IP, Gateway, Subnet, DNS, MQTT
 
 // Pin nút nhấn encoder
 #define SW_PIN 49
@@ -104,7 +113,8 @@ void lcdv2_handle_button();
 void lcdv2_show_main_menu();
 void lcdv2_show_net_menu();
 void lcdv2_show_net_ip_config();
-
+void lcdv2_print_line(uint8_t row, const char *text);
+void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length);
 //---------------------------
 typedef struct
 {
@@ -259,7 +269,14 @@ void checkpulse2()
       if (menuIndex >= MAIN_MENU_ITEMS)
         menuIndex = 0;
     }
-
+    else if (uiMode == UI_MODE_NET_IP_CONFIG)
+    {
+      netFieldIndex++;
+      if (netFieldIndex >= NET_MENU_ITEMS)
+      {
+        netFieldIndex = 0;
+      }
+    }
     break;
 
   case KY040::COUNTERCLOCKWISE:
@@ -283,7 +300,14 @@ void checkpulse2()
       if (menuIndex < 0)
         menuIndex = MAIN_MENU_ITEMS - 1;
     }
-
+    else if (uiMode == UI_MODE_NET_IP_CONFIG)
+    {
+      netFieldIndex--;
+      if (netFieldIndex < 0)
+      {
+        netFieldIndex = NET_MENU_ITEMS - 1;
+      }
+    }
     break;
 
   default:
@@ -422,48 +446,115 @@ inline void lcdv2_handle_button()
         }
         return;
       }
+      // ====== THOÁT MENU NET ======
+      if (uiMode == UI_MODE_NET_IP_CONFIG)
+      {
+        uiMode = UI_MODE_MENU;
+        lcd.clear();
+        return;
+      }
     }
   }
 }
 
 inline void lcdv2_show_main_menu()
 {
-  lcd.setCursor(0, 0);
-  lcd.print("MENU:           ");
+  lcdv2_print_line(0, "MENU:");
 
-  lcd.setCursor(0, 1);
   switch (menuIndex)
   {
   case 0:
-    lcd.print("> VIEW          "); // Xem số liệu (return về UI_MODE_VIEW)
+    lcdv2_print_line(1, "> VIEW"); // Xem số liệu (return về UI_MODE_VIEW)
     break;
   case 1:
+    lcd.setCursor(0, 1);
     lcd.print("> MODE ");
     lcd.print(autoModeEnabled ? "AUTO " : "MAN  ");
+    lcd.print("    ");
     break;
   case 2:
-    lcd.print("> NET CONFIG     ");
+    lcdv2_print_line(1, "> NET CONFIG");
     break;
   case 3:
-    lcd.print("> EXIT          ");
+    lcdv2_print_line(1, "> EXIT");
     break;
   }
 }
 
 inline void lcdv2_show_net_menu()
 {
-  lcd.setCursor(0, 0);
-  lcd.print("NET CONFIG WIP  ");
-  lcd.setCursor(0, 1);
-  lcd.print("...             ");
+  {
+    lcdv2_print_line(0, "NET CONFIG");
+    lcdv2_print_line(1, "Rotate to view");
+  }
 }
 
 inline void lcdv2_show_net_ip_config()
 {
-  lcd.setCursor(0, 0);
-  lcd.print("IP EDIT WIP     ");
-  lcd.setCursor(0, 1);
-  lcd.print("...             ");
+  char buffer[17];
+  buffer[0] = '\0';
+
+  switch (netFieldIndex)
+  {
+  case 0:
+    lcdv2_print_line(0, "IP ADDRESS");
+    lcdv2_format_ip(Ethernet.localIP(), buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 1:
+    lcdv2_print_line(0, "GATEWAY");
+    lcdv2_format_ip(gateway, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 2:
+    lcdv2_print_line(0, "SUBNET");
+    lcdv2_format_ip(subnet, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 3:
+    lcdv2_print_line(0, "DNS SERVER");
+    lcdv2_format_ip(dns, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 4:
+  default:
+  {
+    char hostLine[17];
+    if (mqtt_server != nullptr)
+    {
+      snprintf(hostLine, sizeof(hostLine), "MQTT:%s", mqtt_server);
+    }
+    else
+    {
+      snprintf(hostLine, sizeof(hostLine), "MQTT:N/A");
+    }
+    lcdv2_print_line(0, hostLine);
+    snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
+    lcdv2_print_line(1, buffer);
+    break;
+  }
+  }
+}
+
+inline void lcdv2_print_line(uint8_t row, const char *text)
+{
+  lcd.setCursor(0, row);
+  lcd.print(text);
+  size_t len = strlen(text);
+  while (len < 16)
+  {
+    lcd.print(' ');
+    ++len;
+  }
+}
+
+inline void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length)
+{
+  if (length == 0 || buffer == nullptr)
+  {
+    return;
+  }
+  snprintf(buffer, length, "%u.%u.%u.%u", addr[0], addr[1], addr[2], addr[3]);
 }
 
 void choptat()
@@ -688,7 +779,7 @@ void SetupLCD_3_3_2()
       lcd.print("DIA CHI IP      ");
     if (setIPtinh == 0)
     {
-      sprintf(temp, "%3d.%3d.%3d.%3d ", ipaddress[0], ipaddress[1], ipaddress[2], ipaddress[3]);
+      sprintf(temp, "%3d.%3d.%3d.%3d ", ip[0], ip[1], ip[2], ip[3]);
       lcd.setCursor(0, 1);
       lcd.print(temp);
     }
@@ -739,7 +830,7 @@ void SetupLCD_3_3_2()
             {
               if (setgiatriIP == 256)
               {
-                sprintf(temp, "%3d", ipaddress[i - 1]);
+                sprintf(temp, "%3d", ip[i - 1]);
               }
               else
               {
@@ -750,7 +841,7 @@ void SetupLCD_3_3_2()
           }
           else
           {
-            sprintf(temp, "%3d", ipaddress[i - 1]);
+            sprintf(temp, "%3d", ip[i - 1]);
             lcd.print(temp);
           }
           if (i != 4)
