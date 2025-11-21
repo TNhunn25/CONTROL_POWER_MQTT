@@ -11,7 +11,7 @@
 #define LCDV2_EMBEDDED
 // ===== Static IP Config =====
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34};
-IPAddress ip(192, 168, 80, 196);
+IPAddress ip(192, 168, 80, 5);
 IPAddress dns(8, 8, 8, 8);
 IPAddress gateway(192, 168, 80, 254);
 IPAddress subnet(255, 255, 255, 0);
@@ -20,7 +20,7 @@ const char *mqtt_server = "mqtt.dev.altasoftware.vn";
 const int mqtt_port = 1883;
 const char *mqtt_user = "altamedia";
 const char *mqtt_password = "Altamedia@%";
-const char *mqtt_client_id = "DEMO_HG_QUANTRAC_2025";
+const char *mqtt_client_id = "DEMO_CONTROL_POWER_2025";
 
 const char *topic_test_pub = "CRL_POWER/STATUS";
 const char *topic_cmd_sub = "CRL_POWER/command";
@@ -35,7 +35,7 @@ PubSubClient mqttClient(ethClient);
 char data_MQTT[100] = {0};
 
 // Định danh thiết bị và số lượng relay cần gửi trạng thái.
-const char *device_id = "CTRL_POWER";
+const char *device_id = "CONTROL_POWER";
 // const uint8_t RELAY_COUNT = 4;
 // MEASUREMENT_COUNT = 1 (kênh tổng) + số relay.
 const size_t MEASUREMENT_COUNT = RELAY_COUNT + 1;
@@ -190,33 +190,54 @@ void callback(char *topic, byte *payload, unsigned int len)
 
 void reconnectMQTT()
 {
-  while (!mqttClient.connected())
+  // Thời gian giữa 2 lần thử reconnect
+  const unsigned long RECONNECT_INTERVAL_MS = 5000;
+  static unsigned long lastReconnectAttempt = 0;
+
+  // Nếu đang connected rồi thì thôi
+  if (mqttClient.connected())
+    return;
+
+  unsigned long now = millis();
+
+  // Chưa tới lúc thử lại thì return, tránh block loop()
+  if (now - lastReconnectAttempt < RECONNECT_INTERVAL_MS)
+    return;
+
+  lastReconnectAttempt = now;
+
+  // Nếu lib Ethernet hỗ trợ check link, dùng luôn (nếu không có macro này thì bỏ #ifdef/#endif cũng được)
+#ifdef ETHERNET_HAS_READLINKSTATUS
+  if (Ethernet.linkStatus() == LinkOFF)
   {
-    Serial.println(F("MQTT connecting..."));
+    Serial.println(F("Ethernet link DOWN, skip MQTT reconnect"));
+    return;
+  }
+#endif
 
-    char willPayload[128];
-    snprintf(willPayload, sizeof(willPayload),
-             "{\"id\":\"%s\",\"status\":\"offline\"}", device_id);
+  Serial.println(F("MQTT connecting..."));
 
-    if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password, topic_info, 1, 1, willPayload)) // connect(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage)
-    {
-      Serial.println(F("MQTT OK"));
-      mqttClient.subscribe(topic_cmd_sub);
-      clearRetainedCmd();
+  char willPayload[128];
+  snprintf(willPayload, sizeof(willPayload),
+           "{\"id\":\"%s\",\"status\":\"offline\"}", device_id);
 
-      char onlinePayload[128];
-      snprintf(onlinePayload, sizeof(onlinePayload),
-               "{\"id\":\"%s\",\"status\":\"online\"}", device_id);
-      mqttClient.publish(topic_info, onlinePayload, true);
-    }
+  if (mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_password, topic_info, 1, 1, willPayload))
+  {
+    Serial.println(F("MQTT OK"));
+    mqttClient.subscribe(topic_cmd_sub);
+    clearRetainedCmd();
 
-    else
-    {
-      Serial.print(F("MQTT fail (state="));
-      Serial.print(mqttClient.state());
-      Serial.println(F(") retry..."));
-      delay(2000);
-    }
+    char onlinePayload[128];
+    snprintf(onlinePayload, sizeof(onlinePayload),
+             "{\"id\":\"%s\",\"status\":\"online\"}", device_id);
+    mqttClient.publish(topic_info, onlinePayload, true);
+  }
+  else
+  {
+    Serial.print(F("MQTT fail (state="));
+    Serial.print(mqttClient.state());
+    Serial.println(F(") will retry later..."));
+    // KHÔNG delay ở đây nữa, trả quyền lại cho loop()
   }
 }
 
@@ -375,11 +396,16 @@ void setup()
 // Vòng lặp chính
 void loop()
 {
-  if (!mqttClient.connected())
-    reconnectMQTT();
-  mqttClient.loop();
-
   unsigned long now = millis();
+  if (!mqttClient.connected())
+  {
+    reconnectMQTT();
+  }
+  else
+  {
+    mqttClient.loop();
+  }
+
   if (millis() - setupTime > 5000)
   {
     lcdv2_tick_display();
