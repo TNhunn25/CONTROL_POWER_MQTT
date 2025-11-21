@@ -9,6 +9,7 @@ extern IPAddress ip;
 extern IPAddress gateway;
 extern IPAddress subnet;
 extern IPAddress dns;
+extern mptt_port;
 extern const char *mqtt_server;
 extern const int mqtt_port;
 
@@ -66,8 +67,8 @@ UiMode uiMode = UI_MODE_VIEW;
 
 // Menu chính:
 // 0: Xem số liệu (view)
-// 1: Chế độ Auto/Man (Mode)
-// 2: Cấu hình NET
+// 1: Chế độ xem cấu hình IP hiện tại
+// 2: Cấu hình từng IP tùy chỉnh
 // 3: Thoát exit
 int menuIndex = 0;
 const int MAIN_MENU_ITEMS = 4;
