@@ -242,7 +242,47 @@ void lcdshowchannelstate(int channel)
   }
 }
 
-void checkpulse2()
+void checkpulse2() // chương trình encoder của CH
+{
+  static int value = 0;
+  // You have to run getRotation() very frequently in loop to prevent missing rotary encoder signals
+  // If this is not possible take a look at the pinChangeInterrupt examples
+  switch (g_rotaryEncoder.getRotation())
+  {
+  case KY040::CLOCKWISE:
+    encoderPos++;
+
+    if (encoderPos >= DISPLAY_SCREEN_COUNT) //(>4)
+      encoderPos = 0;
+    flag_encoderPos = encoderPos;
+    Serial.print("Direction: ");
+    Serial.print(currentDir);
+    Serial.print(" | Counter: ");
+    Serial.println(encoderPos);
+    Serial.print(" | Channel: ");
+    Serial.println(flag_encoderPos);
+    // ui32_timeout_mqtt=millis()+5000;
+    timeout_readpzem = millis() + 2000;
+    break;
+  case KY040::COUNTERCLOCKWISE:
+    encoderPos--;
+    if (encoderPos < 0)
+      encoderPos = DISPLAY_SCREEN_COUNT - 1; // 4
+    flag_encoderPos = encoderPos;
+
+    Serial.print("Direction: ");
+    Serial.print(currentDir);
+    Serial.print(" | Counter: ");
+    Serial.println(encoderPos);
+    Serial.print(" | Channel: ");
+    Serial.println(flag_encoderPos);
+    // ui32_timeout_mqtt=millis()+5000;
+    timeout_readpzem = millis() + 2000;
+    break;
+  }
+}
+
+void menu_set()
 {
   switch (g_rotaryEncoder.getRotation())
   {
@@ -348,8 +388,8 @@ inline void lcdv2_begin()
 
 inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
 {
-  lcdv2_handle_button();
   checkpulse2(); // doc xung
+  lcdv2_handle_button();
   // if (flag_encoderPos < CHANNEL_COUNT) // 4
   // {
   //   lcd_show(flag_encoderPos);
@@ -403,9 +443,12 @@ inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
 inline void lcdv2_handle_button()
 {
   int btnState = digitalRead(SW_PIN);
+  static int lastBtnState = HIGH;
 
-  if (btnState == LOW)
+  // phát hiện cạnh xuống: HIGH -> LOW (nhấn nút)
+  if (btnState == LOW && lastBtnState == HIGH)
   {
+    // Khử nảy bằng millis
     if (millis() - lastButtonPress > BUTTON_DEBOUNCE_MS)
     {
       lastButtonPress = millis();
@@ -420,7 +463,7 @@ inline void lcdv2_handle_button()
       }
 
       // ====== ĐANG Ở MENU ======
-      if (uiMode == UI_MODE_MENU)
+      else if (uiMode == UI_MODE_MENU)
       {
         switch (menuIndex)
         {
@@ -429,8 +472,9 @@ inline void lcdv2_handle_button()
           lcd.clear();
           break;
 
-        case 1: // MODE AUTO/MAN
-          autoModeEnabled = !autoModeEnabled;
+        case 1: // NET_MENU
+          uiMode = UI_MODE_NET_MENU;
+          lcd.clear();
           break;
 
         case 2: // NET CONFIG
@@ -444,17 +488,17 @@ inline void lcdv2_handle_button()
           lcd.clear();
           break;
         }
-        return;
       }
       // ====== THOÁT MENU NET ======
-      if (uiMode == UI_MODE_NET_IP_CONFIG)
+      else if (uiMode == UI_MODE_NET_IP_CONFIG)
       {
         uiMode = UI_MODE_MENU;
         lcd.clear();
-        return;
       }
     }
   }
+  // cập nhật trạng thái nút **sau khi** xử lý
+  lastBtnState = btnState;
 }
 
 inline void lcdv2_show_main_menu()
@@ -467,15 +511,9 @@ inline void lcdv2_show_main_menu()
     lcdv2_print_line(1, "> VIEW"); // Xem số liệu (return về UI_MODE_VIEW)
     break;
   case 1:
-    lcd.setCursor(0, 1);
-    lcd.print("> MODE ");
-    lcd.print(autoModeEnabled ? "AUTO " : "MAN  ");
-    lcd.print("    ");
-    break;
-  case 2:
     lcdv2_print_line(1, "> NET CONFIG");
     break;
-  case 3:
+  case 2:
     lcdv2_print_line(1, "> EXIT");
     break;
   }
@@ -557,6 +595,8 @@ inline void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length)
   snprintf(buffer, length, "%u.%u.%u.%u", addr[0], addr[1], addr[2], addr[3]);
 }
 
+//---------------------------------------------------------------------------------
+// update sau
 void choptat()
 {
   /////////////////Chop chu

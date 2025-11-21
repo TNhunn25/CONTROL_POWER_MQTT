@@ -11,7 +11,7 @@
 #define LCDV2_EMBEDDED
 // ===== Static IP Config =====
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34};
-IPAddress ip(192, 168, 80, 196);
+IPAddress ip(192, 168, 80, 5);
 IPAddress dns(8, 8, 8, 8);
 IPAddress gateway(192, 168, 80, 254);
 IPAddress subnet(255, 255, 255, 0);
