@@ -472,13 +472,18 @@ inline void lcdv2_handle_button()
           lcd.clear();
           break;
 
-        case 1: // NET CONFIG
+        case 1: // NET_MENU
+          uiMode = UI_MODE_NET_MENU;
+          lcd.clear();
+          break;
+
+        case 2: // NET CONFIG
           uiMode = UI_MODE_NET_IP_CONFIG;
           netFieldIndex = 0;
           lcd.clear();
           break;
 
-        case 2: // EXIT
+        case 3: // EXIT
           uiMode = UI_MODE_VIEW;
           lcd.clear();
           break;
