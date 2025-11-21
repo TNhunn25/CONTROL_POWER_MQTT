@@ -9,9 +9,8 @@ extern IPAddress ip;
 extern IPAddress gateway;
 extern IPAddress subnet;
 extern IPAddress dns;
-extern mptt_port;
+extern int mqtt_port;
 extern const char *mqtt_server;
-extern const int mqtt_port;
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 int currentStateCLK;
@@ -310,7 +309,7 @@ void menu_set()
       if (menuIndex >= MAIN_MENU_ITEMS)
         menuIndex = 0;
     }
-    else if (uiMode == UI_MODE_NET_IP_CONFIG)
+    else if (uiMode == UI_MODE_NET_MENU || UI_MODE_NET_IP_CONFIG)
     {
       netFieldIndex++;
       if (netFieldIndex >= NET_MENU_ITEMS)
@@ -341,7 +340,7 @@ void menu_set()
       if (menuIndex < 0)
         menuIndex = MAIN_MENU_ITEMS - 1;
     }
-    else if (uiMode == UI_MODE_NET_IP_CONFIG)
+    else if (uiMode == UI_MODE_NET_MENU || UI_MODE_NET_IP_CONFIG)
     {
       netFieldIndex--;
       if (netFieldIndex < 0)
@@ -390,6 +389,7 @@ inline void lcdv2_begin()
 inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
 {
   checkpulse2(); // doc xung
+  menu_set();
   lcdv2_handle_button();
   // if (flag_encoderPos < CHANNEL_COUNT) // 4
   // {
@@ -475,6 +475,7 @@ inline void lcdv2_handle_button()
 
         case 1: // NET_MENU
           uiMode = UI_MODE_NET_MENU;
+          netFieldIndex = 0;
           lcd.clear();
           break;
 
@@ -489,6 +490,11 @@ inline void lcdv2_handle_button()
           lcd.clear();
           break;
         }
+      }
+      else if (uiMode == UI_MODE_NET_MENU)
+      {
+        uiMode = UI_MODE_MENU;
+        lcd.clear();
       }
       // ====== THOÁT MENU NET ======
       else if (uiMode == UI_MODE_NET_IP_CONFIG)
@@ -512,9 +518,12 @@ inline void lcdv2_show_main_menu()
     lcdv2_print_line(1, "> VIEW"); // Xem số liệu (return về UI_MODE_VIEW)
     break;
   case 1:
-    lcdv2_print_line(1, "> NET CONFIG");
+    lcdv2_print_line(1, "> NET VIEW");
     break;
   case 2:
+    lcdv2_print_line(1, "> NET CONFIG");
+    break;
+  case 3:
     lcdv2_print_line(1, "> EXIT");
     break;
   }
@@ -522,9 +531,47 @@ inline void lcdv2_show_main_menu()
 
 inline void lcdv2_show_net_menu()
 {
+  char buffer[17];
+  buffer[0] = '\0';
+  switch (netFieldIndex)
   {
-    lcdv2_print_line(0, "NET CONFIG");
-    lcdv2_print_line(1, "Rotate to view");
+  case 0:
+    lcdv2_print_line(0, "IP (VIEW)");
+    lcdv2_format_ip(Ethernet.localIP(), buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 1:
+    lcdv2_print_line(0, "GATEWAY (VIEW)");
+    lcdv2_format_ip(gateway, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 2:
+    lcdv2_print_line(0, "SUBNET (VIEW)");
+    lcdv2_format_ip(subnet, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 3:
+    lcdv2_print_line(0, "DNS (VIEW)");
+    lcdv2_format_ip(dns, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 4:
+  default:
+  {
+    char hostLine[17];
+    if(mqtt_server != nullptr)
+    {
+      snprintf(hostLine, sizeof(hostLine), "MQTT VIEW:%s", mqtt_server);
+    }
+    else
+    {
+      snprintf(hostLine, sizeof(hostLine), "MQTT VIEW: N/A");
+    }
+    lcdv2_print_line(0, hostLine);
+    snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
+    lcdv2_print_line(1, buffer);
+    break;
+  }
   }
 }
 
