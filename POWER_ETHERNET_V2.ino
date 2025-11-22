@@ -34,6 +34,12 @@ PubSubClient mqttClient(ethClient);
 // Bộ đệm chia sẻ để lưu chữ ký MD5 cho bản tin MQTT.
 char data_MQTT[100] = {0};
 
+void apply_network_settings()
+{
+  Ethernet.begin(mac, ip, dns, gateway, subnet);
+  mqttClient.setServer(mqtt_server, mqtt_port);
+}
+
 // Định danh thiết bị và số lượng relay cần gửi trạng thái.
 const char *device_id = "CONTROL_POWER";
 // const uint8_t RELAY_COUNT = 4;

@@ -12,6 +12,8 @@ extern IPAddress dns;
 extern int mqtt_port;
 extern const char *mqtt_server;
 
+void apply_network_settings();
+
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 int currentStateCLK;
 int lastStateCLK;
@@ -73,6 +75,8 @@ int menuIndex = 0;
 const int MAIN_MENU_ITEMS = 4;
 int netFieldIndex = 0;
 const int NET_MENU_ITEMS = 5; // IP, Gateway, Subnet, DNS, MQTT
+// Lưu vết mục NET CONFIG đã vẽ lần cuối để tránh refresh không cần thiết
+int lastNetCfgIndex = -1;
 
 // Pin nút nhấn encoder
 #define SW_PIN 49
@@ -109,12 +113,22 @@ int IPtinh = 0;
 int setIPtinh = 0;
 int setgiatriIP = 0;
 
+bool netEditing = false;
+uint8_t netEditDigitIndex = 0;
+uint8_t netEditBuffer[4] = {0};
+char netEditString[16] = {0};
+IPAddress *netEditTarget = nullptr;
+
 void lcdv2_handle_button();
 void lcdv2_show_main_menu();
 void lcdv2_show_net_menu();
 void lcdv2_show_net_ip_config();
 void lcdv2_print_line(uint8_t row, const char *text);
-void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length);
+void lcdv2_format_ip(const uint8_t octets[4], char *buffer, size_t length);
+IPAddress *lcdv2_get_selected_address();
+void lcdv2_start_edit_net_field();
+void lcdv2_commit_net_octet();
+void lcdv2_finish_net_edit();
 //---------------------------
 typedef struct
 {
@@ -299,6 +313,21 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET
     break;
   default:
     return; // không xoay thì thôi
+  }
+
+  // ===== ĐANG CHỈNH TỪNG CHỮ SỐ ĐỊA CHỈ MẠNG =====
+  if (netEditing)
+  {
+    if (netEditString[netEditDigitIndex] == '.')
+    {
+      return;
+    }
+
+    int digit = netEditString[netEditDigitIndex] - '0';
+    // xoay encoder để tăng/giảm từng chữ số 0..9 (quay vòng)
+    digit = (digit + step + 10) % 10;
+    netEditString[netEditDigitIndex] = static_cast<char>('0' + digit);
+    return;
   }
 
   // ===== VIEW MODE: giữ behavior cũ để đổi màn hình CH =====
@@ -497,8 +526,22 @@ inline void lcdv2_handle_button()
       // ====== THOÁT MENU NET ======
       else if (uiMode == UI_MODE_NET_IP_CONFIG)
       {
-        uiMode = UI_MODE_MENU;
-        lcd.clear();
+        // uiMode = UI_MODE_MENU;
+        // lcd.clear();
+        // ===== ĐANG CHỈNH TỪNG CHỮ SỐ ĐỊA CHỈ MẠNG =====
+        if (netEditing)
+        {
+          lcdv2_commit_net_octet();
+        }
+        else if (netFieldIndex < 4)
+        {
+          lcdv2_start_edit_net_field();
+        }
+        else
+        {
+          uiMode = UI_MODE_MENU;
+          lcd.clear();
+        }
       }
     }
   }
@@ -592,8 +635,9 @@ inline void lcdv2_show_net_menu()
 
 inline void lcdv2_show_net_ip_config()
 {
-  static int lastNetCfgIndex = -1;
-  if (netFieldIndex == lastNetCfgIndex)
+  // static int lastNetCfgIndex = -1;
+  // if (netFieldIndex == lastNetCfgIndex)
+  if (netFieldIndex == lastNetCfgIndex && !netEditing)
   {
     return;
   }
@@ -602,11 +646,24 @@ inline void lcdv2_show_net_ip_config()
   char buffer[17];
   buffer[0] = '\0';
 
+  if (netEditing)
+  {
+    const char *titles[] = {"SUA IP", "SUA GW", "SUA SUB", "SUA DNS", "MQTT"};
+    lcdv2_print_line(0, titles[netFieldIndex]);
+    lcdv2_print_line(1, netEditString);
+
+    lcd.setCursor(netEditDigitIndex, 1);
+    lcd.cursor();
+    return;
+  }
+
+  lcd.noCursor();
+
   switch (netFieldIndex)
   {
   case 0:
     lcdv2_print_line(0, "IP ADDRESS");
-    lcdv2_format_ip(Ethernet.localIP(), buffer, sizeof(buffer));
+    lcdv2_format_ip(ip, buffer, sizeof(buffer));
     lcdv2_print_line(1, buffer);
     break;
   case 1:
@@ -628,15 +685,16 @@ inline void lcdv2_show_net_ip_config()
   default:
   {
     char hostLine[17];
-    if (mqtt_server != nullptr)
-    {
-      snprintf(hostLine, sizeof(hostLine), "MQTT:%s", mqtt_server);
-    }
-    else
-    {
-      snprintf(hostLine, sizeof(hostLine), "MQTT:N/A");
-    }
-    lcdv2_print_line(0, hostLine);
+    // hiển thị máy chủ MQTT
+    // if (mqtt_server != nullptr)
+    // {
+    //   snprintf(hostLine, sizeof(hostLine), "MQTT:%s", mqtt_server);
+    // }
+    // else
+    // {
+    //   snprintf(hostLine, sizeof(hostLine), "MQTT:N/A");
+    // }
+    // lcdv2_print_line(0, hostLine);
     snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
     lcdv2_print_line(1, buffer);
     break;
@@ -656,13 +714,104 @@ inline void lcdv2_print_line(uint8_t row, const char *text)
   }
 }
 
-inline void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length)
+inline void lcdv2_format_ip(const uint8_t octets[4], char *buffer, size_t length)
 {
   if (length == 0 || buffer == nullptr)
   {
     return;
   }
-  snprintf(buffer, length, "%u.%u.%u.%u", addr[0], addr[1], addr[2], addr[3]);
+  snprintf(buffer, length, "%u.%u.%u.%u", octets[0], octets[1], octets[2], octets[3]);
+}
+
+inline IPAddress *lcdv2_get_selected_address()
+{
+  switch (netFieldIndex)
+  {
+  case 0:
+    return &ip;
+  case 1:
+    return &gateway;
+  case 2:
+    return &subnet;
+  case 3:
+    return &dns;
+  default:
+    return nullptr;
+  }
+}
+
+inline void lcdv2_start_edit_net_field()
+{
+  IPAddress *target = lcdv2_get_selected_address();
+  if (target == nullptr)
+  {
+    return;
+  }
+
+  netEditTarget = target;
+
+  for (uint8_t i = 0; i < 4; ++i)
+  {
+    netEditBuffer[i] = (*netEditTarget)[i];
+  }
+
+  snprintf(netEditString, sizeof(netEditString), "%03u.%03u.%03u.%03u", netEditBuffer[0], netEditBuffer[1], netEditBuffer[2], netEditBuffer[3]);
+
+  netEditDigitIndex = 0;
+  netEditing = true;
+  lastNetCfgIndex = -1; // buộc vẽ lại
+}
+
+inline void lcdv2_finish_net_edit()
+{
+  if (netEditTarget == nullptr)
+  {
+    netEditing = false;
+    return;
+  }
+
+  netEditBuffer[0] = static_cast<uint8_t>((netEditString[0] - '0') * 100 + (netEditString[1] - '0') * 10 + (netEditString[2] - '0'));
+  netEditBuffer[1] = static_cast<uint8_t>((netEditString[4] - '0') * 100 + (netEditString[5] - '0') * 10 + (netEditString[6] - '0'));
+  netEditBuffer[2] = static_cast<uint8_t>((netEditString[8] - '0') * 100 + (netEditString[9] - '0') * 10 + (netEditString[10] - '0'));
+  netEditBuffer[3] = static_cast<uint8_t>((netEditString[12] - '0') * 100 + (netEditString[13] - '0') * 10 + (netEditString[14] - '0'));
+
+  for (uint8_t i = 0; i < 4; ++i)
+  {
+    if (netEditBuffer[i] > 255)
+    {
+      netEditBuffer[i] = 255;
+    }
+  }
+
+  *netEditTarget = IPAddress(netEditBuffer[0], netEditBuffer[1], netEditBuffer[2], netEditBuffer[3]);
+  apply_network_settings();
+
+  netEditing = false;
+  netEditTarget = nullptr;
+  netEditDigitIndex = 0;
+  lastNetCfgIndex = -1;
+  lcd.noCursor();
+}
+
+inline void lcdv2_commit_net_octet()
+{
+  if (!netEditing)
+  {
+    return;
+  }
+
+  do
+  {
+    ++netEditDigitIndex;
+  } while (netEditDigitIndex < sizeof(netEditString) - 1 && netEditString[netEditDigitIndex] == '.');
+
+  if (netEditDigitIndex >= sizeof(netEditString) - 1)
+  {
+    lcdv2_finish_net_edit();
+    return;
+  }
+
+  lcd.setCursor(netEditDigitIndex, 1);
 }
 
 //---------------------------------------------------------------------------------
