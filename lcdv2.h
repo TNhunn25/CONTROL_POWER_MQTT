@@ -9,8 +9,8 @@ extern IPAddress ip;
 extern IPAddress gateway;
 extern IPAddress subnet;
 extern IPAddress dns;
+extern int mqtt_port;
 extern const char *mqtt_server;
-extern const int mqtt_port;
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 int currentStateCLK;
@@ -66,8 +66,8 @@ UiMode uiMode = UI_MODE_VIEW;
 
 // Menu chính:
 // 0: Xem số liệu (view)
-// 1: Chế độ Auto/Man (Mode)
-// 2: Cấu hình NET
+// 1: Chế độ xem cấu hình IP hiện tại
+// 2: Cấu hình từng IP tùy chỉnh
 // 3: Thoát exit
 int menuIndex = 0;
 const int MAIN_MENU_ITEMS = 4;
@@ -242,116 +242,122 @@ void lcdshowchannelstate(int channel)
   }
 }
 
-void checkpulse2() // chương trình encoder của CH
+// void checkpulse2() // chương trình encoder của CH
+// {
+//   static int value = 0;
+//   // You have to run getRotation() very frequently in loop to prevent missing rotary encoder signals
+//   // If this is not possible take a look at the pinChangeInterrupt examples
+//   switch (g_rotaryEncoder.getRotation())
+//   {
+//   case KY040::CLOCKWISE:
+//     encoderPos++;
+
+//     if (encoderPos >= DISPLAY_SCREEN_COUNT) //(>4)
+//       encoderPos = 0;
+//     flag_encoderPos = encoderPos;
+//     Serial.print("Direction: ");
+//     Serial.print(currentDir);
+//     Serial.print(" | Counter: ");
+//     Serial.println(encoderPos);
+//     Serial.print(" | Channel: ");
+//     Serial.println(flag_encoderPos);
+//     // ui32_timeout_mqtt=millis()+5000;
+//     timeout_readpzem = millis() + 2000;
+//     break;
+//   case KY040::COUNTERCLOCKWISE:
+//     encoderPos--;
+//     if (encoderPos < 0)
+//       encoderPos = DISPLAY_SCREEN_COUNT - 1; // 4
+//     flag_encoderPos = encoderPos;
+
+//     Serial.print("Direction: ");
+//     Serial.print(currentDir);
+//     Serial.print(" | Counter: ");
+//     Serial.println(encoderPos);
+//     Serial.print(" | Channel: ");
+//     Serial.println(flag_encoderPos);
+//     // ui32_timeout_mqtt=millis()+5000;
+//     timeout_readpzem = millis() + 2000;
+//     break;
+//   }
+// }
+
+void checkpulse2() // chương trình encoder: VIEW + MENU + NET
 {
-  static int value = 0;
-  // You have to run getRotation() very frequently in loop to prevent missing rotary encoder signals
-  // If this is not possible take a look at the pinChangeInterrupt examples
+  static int value = 0; // bạn đang để, cứ giữ cũng không sao
+
+  int step = 0;
+
+  // Đọc trạng thái xoay từ thư viện KY040 (giống code cũ)
   switch (g_rotaryEncoder.getRotation())
   {
   case KY040::CLOCKWISE:
-    encoderPos++;
-
-    if (encoderPos >= DISPLAY_SCREEN_COUNT) //(>4)
-      encoderPos = 0;
-    flag_encoderPos = encoderPos;
-    Serial.print("Direction: ");
-    Serial.print(currentDir);
-    Serial.print(" | Counter: ");
-    Serial.println(encoderPos);
-    Serial.print(" | Channel: ");
-    Serial.println(flag_encoderPos);
-    // ui32_timeout_mqtt=millis()+5000;
-    timeout_readpzem = millis() + 2000;
+    step = +1;
     break;
   case KY040::COUNTERCLOCKWISE:
-    encoderPos--;
-    if (encoderPos < 0)
-      encoderPos = DISPLAY_SCREEN_COUNT - 1; // 4
-    flag_encoderPos = encoderPos;
-
-    Serial.print("Direction: ");
-    Serial.print(currentDir);
-    Serial.print(" | Counter: ");
-    Serial.println(encoderPos);
-    Serial.print(" | Channel: ");
-    Serial.println(flag_encoderPos);
-    // ui32_timeout_mqtt=millis()+5000;
-    timeout_readpzem = millis() + 2000;
+    step = -1;
     break;
+  default:
+    return; // không xoay thì thôi
   }
-}
 
-void menu_set()
-{
-  switch (g_rotaryEncoder.getRotation())
+  // ===== VIEW MODE: giữ behavior cũ để đổi màn hình CH =====
+  if (uiMode == UI_MODE_VIEW)
   {
-  case KY040::CLOCKWISE:
-    if (uiMode == UI_MODE_VIEW)
+    if (step > 0)
     {
-      // Xoay để đổi màn hình (như code cũ)
       encoderPos++;
-      if (encoderPos >= DISPLAY_SCREEN_COUNT)
-        encoderPos = 0;
-      flag_encoderPos = encoderPos;
-      Serial.print("Direction: ");
-      Serial.print(currentDir);
-      Serial.print(" | Counter: ");
-      Serial.println(encoderPos);
-      Serial.print(" | Channel: ");
-      Serial.println(flag_encoderPos);
-      timeout_readpzem = millis() + 2000;
-    }
-    else if (uiMode == UI_MODE_MENU)
-    {
-      // Xoay để đổi lựa chọn menu
-      menuIndex++;
-      if (menuIndex >= MAIN_MENU_ITEMS)
-        menuIndex = 0;
-    }
-    else if (uiMode == UI_MODE_NET_IP_CONFIG)
-    {
-      netFieldIndex++;
-      if (netFieldIndex >= NET_MENU_ITEMS)
-      {
-        netFieldIndex = 0;
-      }
-    }
-    break;
 
-  case KY040::COUNTERCLOCKWISE:
-    if (uiMode == UI_MODE_VIEW)
+      if (encoderPos >= DISPLAY_SCREEN_COUNT) //(>4)
+        encoderPos = 0;
+    }
+    else // step < 0
     {
       encoderPos--;
       if (encoderPos < 0)
-        encoderPos = DISPLAY_SCREEN_COUNT - 1;
-      flag_encoderPos = encoderPos;
-      Serial.print("Direction: ");
-      Serial.print(currentDir);
-      Serial.print(" | Counter: ");
-      Serial.println(encoderPos);
-      Serial.print(" | Channel: ");
-      Serial.println(flag_encoderPos);
-      timeout_readpzem = millis() + 2000;
+        encoderPos = DISPLAY_SCREEN_COUNT - 1; // 4
     }
-    else if (uiMode == UI_MODE_MENU)
-    {
-      menuIndex--;
-      if (menuIndex < 0)
-        menuIndex = MAIN_MENU_ITEMS - 1;
-    }
-    else if (uiMode == UI_MODE_NET_IP_CONFIG)
-    {
-      netFieldIndex--;
-      if (netFieldIndex < 0)
-      {
-        netFieldIndex = NET_MENU_ITEMS - 1;
-      }
-    }
-    break;
 
-  default:
-    break;
+    flag_encoderPos = encoderPos;
+    Serial.print("Direction: ");
+    Serial.print(currentDir);
+    Serial.print(" | Counter: ");
+    Serial.println(encoderPos);
+    Serial.print(" | Channel: ");
+    Serial.println(flag_encoderPos);
+    // ui32_timeout_mqtt=millis()+5000;
+    timeout_readpzem = millis() + 2000;
+    return;
+  }
+
+  // ===== MENU MODE: xoay để đổi lựa chọn menu chính =====
+  if (uiMode == UI_MODE_MENU)
+  {
+    menuIndex += step;
+
+    if (menuIndex >= MAIN_MENU_ITEMS)
+      menuIndex = 0;
+    else if (menuIndex < 0)
+      menuIndex = MAIN_MENU_ITEMS - 1;
+
+    // Serial.print("MENU step="); Serial.print(step);
+    // Serial.print("  menuIndex="); Serial.println(menuIndex);
+    return;
+  }
+
+  // ===== NET MENU & NET IP CONFIG: xoay để đổi IP/GW/Subnet/DNS/MQTT =====
+  if (uiMode == UI_MODE_NET_MENU || uiMode == UI_MODE_NET_IP_CONFIG)
+  {
+    netFieldIndex += step;
+
+    if (netFieldIndex >= NET_MENU_ITEMS)
+      netFieldIndex = 0;
+    else if (netFieldIndex < 0)
+      netFieldIndex = NET_MENU_ITEMS - 1;
+
+    // Serial.print("NET step="); Serial.print(step);
+    // Serial.print("  netFieldIndex="); Serial.println(netFieldIndex);
+    return;
   }
 }
 
@@ -388,25 +394,19 @@ inline void lcdv2_begin()
 
 inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
 {
-  checkpulse2(); // doc xung
+
+  // Ở VIEW: dùng logic cũ, mượt, CH
+  checkpulse2();
+
+  // ---- XỬ LÝ NÚT NHẤN ----
   lcdv2_handle_button();
-  // if (flag_encoderPos < CHANNEL_COUNT) // 4
-  // {
-  //   lcd_show(flag_encoderPos);
-  // }
-  // else if (flag_encoderPos == CHANNEL_COUNT) // 4
-  // {
-  //   lcdshowchannelstate(flag_encoderPos);
-  // }
-  // // lcd_show(flag_encoderPos);
 
-  // Đọc nút + encoder mỗi lần tick
-
+  // ---- VẼ LCD THEO uiMode ----
   if (uiMode == UI_MODE_VIEW)
   {
     if (flag_encoderPos < CHANNEL_COUNT)
     {
-      lcd_show(flag_encoderPos); // Total + từng CHn
+      lcd_show(flag_encoderPos); // Total + CH1..CH4
     }
     else if (flag_encoderPos == CHANNEL_COUNT)
     {
@@ -426,7 +426,6 @@ inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
     lcdv2_show_net_ip_config();
   }
 }
-
 inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
 {
   if (lastReadMs <= millis())
@@ -459,7 +458,6 @@ inline void lcdv2_handle_button()
         uiMode = UI_MODE_MENU;
         menuIndex = 0;
         lcd.clear();
-        return;
       }
 
       // ====== ĐANG Ở MENU ======
@@ -474,6 +472,7 @@ inline void lcdv2_handle_button()
 
         case 1: // NET_MENU
           uiMode = UI_MODE_NET_MENU;
+          netFieldIndex = 0;
           lcd.clear();
           break;
 
@@ -488,6 +487,11 @@ inline void lcdv2_handle_button()
           lcd.clear();
           break;
         }
+      }
+      else if (uiMode == UI_MODE_NET_MENU)
+      {
+        uiMode = UI_MODE_MENU;
+        lcd.clear();
       }
       // ====== THOÁT MENU NET ======
       else if (uiMode == UI_MODE_NET_IP_CONFIG)
@@ -511,9 +515,12 @@ inline void lcdv2_show_main_menu()
     lcdv2_print_line(1, "> VIEW"); // Xem số liệu (return về UI_MODE_VIEW)
     break;
   case 1:
-    lcdv2_print_line(1, "> NET CONFIG");
+    lcdv2_print_line(1, "> NET VIEW");
     break;
   case 2:
+    lcdv2_print_line(1, "> NET CONFIG");
+    break;
+  case 3:
     lcdv2_print_line(1, "> EXIT");
     break;
   }
@@ -521,9 +528,47 @@ inline void lcdv2_show_main_menu()
 
 inline void lcdv2_show_net_menu()
 {
+  char buffer[17];
+  buffer[0] = '\0';
+  switch (netFieldIndex)
   {
-    lcdv2_print_line(0, "NET CONFIG");
-    lcdv2_print_line(1, "Rotate to view");
+  case 0:
+    lcdv2_print_line(0, "IP (VIEW)");
+    lcdv2_format_ip(Ethernet.localIP(), buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 1:
+    lcdv2_print_line(0, "GATEWAY (VIEW)");
+    lcdv2_format_ip(gateway, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 2:
+    lcdv2_print_line(0, "SUBNET (VIEW)");
+    lcdv2_format_ip(subnet, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 3:
+    lcdv2_print_line(0, "DNS (VIEW)");
+    lcdv2_format_ip(dns, buffer, sizeof(buffer));
+    lcdv2_print_line(1, buffer);
+    break;
+  case 4:
+  default:
+  {
+    char hostLine[17];
+    if (mqtt_server != nullptr)
+    {
+      snprintf(hostLine, sizeof(hostLine), "MQTT VIEW:%s", mqtt_server);
+    }
+    else
+    {
+      snprintf(hostLine, sizeof(hostLine), "MQTT VIEW: N/A");
+    }
+    lcdv2_print_line(0, hostLine);
+    snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
+    lcdv2_print_line(1, buffer);
+    break;
+  }
   }
 }
 

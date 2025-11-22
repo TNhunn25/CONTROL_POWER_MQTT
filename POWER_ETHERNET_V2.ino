@@ -17,7 +17,7 @@ IPAddress gateway(192, 168, 80, 254);
 IPAddress subnet(255, 255, 255, 0);
 // ===== MQTT Info =====
 const char *mqtt_server = "mqtt.dev.altasoftware.vn";
-const int mqtt_port = 1883;
+int mqtt_port = 1883;
 const char *mqtt_user = "altamedia";
 const char *mqtt_password = "Altamedia@%";
 const char *mqtt_client_id = "DEMO_CONTROL_POWER_2025";
