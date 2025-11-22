@@ -426,6 +426,7 @@ inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
     lcdv2_show_net_ip_config();
   }
 }
+
 inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
 {
   if (lastReadMs <= millis())
@@ -507,6 +508,15 @@ inline void lcdv2_handle_button()
 
 inline void lcdv2_show_main_menu()
 {
+  static int lastMenuIndex = -1;
+
+  // Nếu không đổi menuIndex thì khỏi vẽ lại → tiết kiệm thời gian
+  if (menuIndex == lastMenuIndex)
+  {
+    return;
+  }
+  lastMenuIndex = menuIndex;
+
   lcdv2_print_line(0, "MENU:");
 
   switch (menuIndex)
@@ -528,8 +538,16 @@ inline void lcdv2_show_main_menu()
 
 inline void lcdv2_show_net_menu()
 {
+  static int lastNetIndex = -1;
+  if (netFieldIndex == lastNetIndex)
+  {
+    return; // không đổi mục → không cần vẽ lại
+  }
+  lastNetIndex = netFieldIndex;
+
   char buffer[17];
   buffer[0] = '\0';
+
   switch (netFieldIndex)
   {
   case 0:
@@ -556,15 +574,15 @@ inline void lcdv2_show_net_menu()
   default:
   {
     char hostLine[17];
-    if (mqtt_server != nullptr)
-    {
-      snprintf(hostLine, sizeof(hostLine), "MQTT VIEW:%s", mqtt_server);
-    }
-    else
-    {
-      snprintf(hostLine, sizeof(hostLine), "MQTT VIEW: N/A");
-    }
-    lcdv2_print_line(0, hostLine);
+    // if (mqtt_server != nullptr)
+    // {
+    //   snprintf(hostLine, sizeof(hostLine), "MQTT VIEW:%s", mqtt_server);
+    // }
+    // else
+    // {
+    //   snprintf(hostLine, sizeof(hostLine), "MQTT VIEW: N/A");
+    // }
+    // lcdv2_print_line(0, hostLine);
     snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
     lcdv2_print_line(1, buffer);
     break;
@@ -574,6 +592,13 @@ inline void lcdv2_show_net_menu()
 
 inline void lcdv2_show_net_ip_config()
 {
+  static int lastNetCfgIndex = -1;
+  if (netFieldIndex == lastNetCfgIndex)
+  {
+    return;
+  }
+  lastNetCfgIndex = netFieldIndex;
+
   char buffer[17];
   buffer[0] = '\0';
 
