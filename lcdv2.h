@@ -659,47 +659,47 @@ inline void lcdv2_show_net_ip_config()
 
   lcd.noCursor();
 
-  switch (netFieldIndex)
-  {
-  case 0:
-    lcdv2_print_line(0, "IP ADDRESS");
-    lcdv2_format_ip(ip, buffer, sizeof(buffer));
-    lcdv2_print_line(1, buffer);
-    break;
-  case 1:
-    lcdv2_print_line(0, "GATEWAY");
-    lcdv2_format_ip(gateway, buffer, sizeof(buffer));
-    lcdv2_print_line(1, buffer);
-    break;
-  case 2:
-    lcdv2_print_line(0, "SUBNET");
-    lcdv2_format_ip(subnet, buffer, sizeof(buffer));
-    lcdv2_print_line(1, buffer);
-    break;
-  case 3:
-    lcdv2_print_line(0, "DNS SERVER");
-    lcdv2_format_ip(dns, buffer, sizeof(buffer));
-    lcdv2_print_line(1, buffer);
-    break;
-  case 4:
-  default:
-  {
-    char hostLine[17];
-    // hiển thị máy chủ MQTT
-    // if (mqtt_server != nullptr)
-    // {
-    //   snprintf(hostLine, sizeof(hostLine), "MQTT:%s", mqtt_server);
-    // }
-    // else
-    // {
-    //   snprintf(hostLine, sizeof(hostLine), "MQTT:N/A");
-    // }
-    // lcdv2_print_line(0, hostLine);
-    snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
-    lcdv2_print_line(1, buffer);
-    break;
-  }
-  }
+  // switch (netFieldIndex)
+  // {
+  // case 0:
+  //   lcdv2_print_line(0, "IP ADDRESS");
+  //   lcdv2_format_ip(ip, buffer, sizeof(buffer));
+  //   lcdv2_print_line(1, buffer);
+  //   break;
+  // case 1:
+  //   lcdv2_print_line(0, "GATEWAY");
+  //   lcdv2_format_ip(gateway, buffer, sizeof(buffer));
+  //   lcdv2_print_line(1, buffer);
+  //   break;
+  // case 2:
+  //   lcdv2_print_line(0, "SUBNET");
+  //   lcdv2_format_ip(subnet, buffer, sizeof(buffer));
+  //   lcdv2_print_line(1, buffer);
+  //   break;
+  // case 3:
+  //   lcdv2_print_line(0, "DNS SERVER");
+  //   lcdv2_format_ip(dns, buffer, sizeof(buffer));
+  //   lcdv2_print_line(1, buffer);
+  //   break;
+  // case 4:
+  // default:
+  // {
+  //   char hostLine[17];
+  //   // hiển thị máy chủ MQTT
+  //   // if (mqtt_server != nullptr)
+  //   // {
+  //   //   snprintf(hostLine, sizeof(hostLine), "MQTT:%s", mqtt_server);
+  //   // }
+  //   // else
+  //   // {
+  //   //   snprintf(hostLine, sizeof(hostLine), "MQTT:N/A");
+  //   // }
+  //   // lcdv2_print_line(0, hostLine);
+  //   snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
+  //   lcdv2_print_line(1, buffer);
+  //   break;
+  // }
+  // }
 }
 
 inline void lcdv2_print_line(uint8_t row, const char *text)
