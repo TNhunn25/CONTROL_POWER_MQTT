@@ -34,10 +34,27 @@ PubSubClient mqttClient(ethClient);
 // Bộ đệm chia sẻ để lưu chữ ký MD5 cho bản tin MQTT.
 char data_MQTT[100] = {0};
 
+// void apply_network_settings()
+// {
+//   Ethernet.begin(mac, ip, dns, gateway, subnet);
+//   mqttClient.setServer(mqtt_server, mqtt_port);
+// }
+
 void apply_network_settings()
 {
   Ethernet.begin(mac, ip, dns, gateway, subnet);
+  mqttClient.disconnect();
   mqttClient.setServer(mqtt_server, mqtt_port);
+
+  Serial.println(F("[NET] Applied manual configuration"));
+  Serial.print(F("  IP      : "));
+  Serial.println(Ethernet.localIP());
+  Serial.print(F("  Gateway : "));
+  Serial.println(gateway);
+  Serial.print(F("  Subnet  : "));
+  Serial.println(subnet);
+  Serial.print(F("  DNS     : "));
+  Serial.println(dns);
 }
 
 // Định danh thiết bị và số lượng relay cần gửi trạng thái.
