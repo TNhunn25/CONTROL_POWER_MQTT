@@ -4,7 +4,9 @@
 #include "HC4052.h"
 #include <string.h>
 #include "Hshopvn_Pzem004t_V2.h"
-#include <KY040.h>
+// #include <KY040.h>
+#include <ClickEncoder.h>
+#include <TimerOne.h>
 
 extern IPAddress ip;
 extern IPAddress gateway;
@@ -22,8 +24,20 @@ String currentDir = "";
 unsigned long lastButtonPress = 0;
 
 #define CLK_PIN 47 // aka. A
-#define DT_PIN 48  // aka. B
-KY040 g_rotaryEncoder(CLK_PIN, DT_PIN);
+#define DT_PIN 48  // aka. BF
+// KY040 g_rotaryEncoder(CLK_PIN, DT_PIN);
+
+// Con trỏ encoder dùng chung cho lcdv2
+ClickEncoder *g_encoder = nullptr;
+
+// ISR gọi mỗi 1ms để phục vụ ClickEncoder
+void lcdv2_encoder_isr()
+{
+  if (g_encoder)
+  {
+    g_encoder->service();
+  }
+}
 
 unsigned long lastTelemetryMs = 0;
 int encoderPos = 0;
@@ -83,36 +97,7 @@ int lastNetCfgIndex = -1;
 #define SW_PIN 49
 
 const unsigned long BUTTON_DEBOUNCE_MS = 80;
-
-String chuString[65] = {" ", "a", "A", "b", "B", "c", "C", "d", "D", "e", "E", "f", "F", "g", "G", "h", "H", "i", "I", "j", "J", "k", "K", "l", "L", "m", "M", "n", "N", "o", "O", "p", "P", "q", "Q", "r", "R", "s", "S", "t", "T", "u", "U", "v", "V", "w", "W", ",x", "X", "y", "Y", "z", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "-"};
-char chuChar[65] = " aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789.-";
-byte Name[5];     //={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,};
-byte Nametemp[5]; //={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,};
-int setchu = 0;
-
-byte ServerAddress[32];
-byte ServerAddresstemp[32];
-
-byte UserName[32];     //={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,};
-byte UserNametemp[32]; //={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,};
-
-char temp[16];
-int giatriEncoder = 0;
-int Setup_1 = 0;
-int Setup_2 = 0;
-int Setup_3 = 0;
-int Setup_4 = 0;
-int nhanSetup = 0;
-unsigned long timer_thoatSetup = 0;
-
-long timer_chopchu = 0;
-int dongchop = 0;
-int chopchu = 0;
-
-int ngonngu = 0;
-int IPtinh = 0;
-int setIPtinh = 0;
-int setgiatriIP = 0;
+const unsigned long BUTTON_LONG_PRESS_MS = 2000; // 2 giây nhấn giữ để thoát menu
 
 bool netEditing = false;
 uint8_t netEditDigitIndex = 0;
@@ -299,23 +284,44 @@ void lcdshowchannelstate(int channel)
 //   }
 // }
 
-void checkpulse2() // chương trình encoder: VIEW + MENU + NET
+void checkpulse2() // chương trình encoder: VIEW + MENU + NET (dùng ClickEncoder)
 {
-  static int value = 0; // bạn đang để, cứ giữ cũng không sao
+  // rawAccum: cộng dồn step thô của ClickEncoder
+  static int16_t rawAccum = 0;
+
+  if (!g_encoder)
+  {
+    return;
+  }
+
+  // Δstep đọc được từ encoder (mỗi lần Timer1 gọi service())
+  int16_t delta = g_encoder->getValue();
+  if (delta == 0)
+  {
+    return; // không xoay thì thôi
+  }
+
+  rawAccum += delta;
+
+  // MỖI 4 STEP THÔ MỚI TÍNH LÀ 1 BƯỚC LOGIC → GIẢM ĐỘ NHẠY
+  const int STEPS_PER_NOTCH = 3; // có thể đổi 2 nếu muốn nhạy hơn
 
   int step = 0;
 
-  // Đọc trạng thái xoay từ thư viện KY040 (giống code cũ)
-  switch (g_rotaryEncoder.getRotation())
+  while (rawAccum >= STEPS_PER_NOTCH)
   {
-  case KY040::CLOCKWISE:
-    step = +1;
-    break;
-  case KY040::COUNTERCLOCKWISE:
-    step = -1;
-    break;
-  default:
-    return; // không xoay thì thôi
+    step++;
+    rawAccum -= STEPS_PER_NOTCH;
+  }
+  while (rawAccum <= -STEPS_PER_NOTCH)
+  {
+    step--;
+    rawAccum += STEPS_PER_NOTCH;
+  }
+
+  if (step == 0)
+  {
+    return; // xoay ít quá, chưa đủ 4 step → bỏ qua
   }
 
   // ===== ĐANG CHỈNH TỪNG CHỮ SỐ ĐỊA CHỈ MẠNG =====
@@ -327,50 +333,43 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET
     }
 
     int digit = netEditString[netEditDigitIndex] - '0';
-    // xoay encoder để tăng/giảm từng chữ số 0..9 (quay vòng)
-    digit = (digit + step + 10) % 10;
+    digit = (digit + step + 10) % 10; // quay vòng 0..9
     netEditString[netEditDigitIndex] = static_cast<char>('0' + digit);
 
-    // 👉 VẼ TRỰC TIẾP KÝ TỰ VỪA ĐỔI LÊN LCD CHO NHẠY
+    // Vẽ trực tiếp ký tự vừa đổi cho nhạy
     lcd.setCursor(netEditDigitIndex, 1);
     lcd.print(netEditString[netEditDigitIndex]);
-    // đặt lại con trỏ tại vị trí đang edit
     lcd.setCursor(netEditDigitIndex, 1);
     lcd.cursor();
-
     return;
   }
 
   // ===== ĐANG Ở MÀN HÌNH CONFIRM (OK / EXIT) =====
   if (uiMode == UI_MODE_NET_IP_CONFIG && netConfirming)
   {
-    // chỉ xử lý khi thực sự có step
     if (step != 0)
     {
       // 0 <-> 1 (OK <-> EXIT)
       netConfirmSelection ^= 1;
-
-      // vẽ lại ngay màn hình OK / EXIT
       lcdv2_show_net_ip_config();
     }
-    return; // không cho rơi xuống các mode khác
+    return;
   }
 
-  // ===== VIEW MODE: giữ behavior cũ để đổi màn hình CH =====
+  // ===== VIEW MODE: đổi kênh CH =====
   if (uiMode == UI_MODE_VIEW)
   {
     if (step > 0)
     {
       encoderPos++;
-
-      if (encoderPos >= DISPLAY_SCREEN_COUNT) //(>4)
+      if (encoderPos >= DISPLAY_SCREEN_COUNT)
         encoderPos = 0;
     }
-    else // step < 0
+    else
     {
       encoderPos--;
       if (encoderPos < 0)
-        encoderPos = DISPLAY_SCREEN_COUNT - 1; // 4
+        encoderPos = DISPLAY_SCREEN_COUNT - 1;
     }
 
     flag_encoderPos = encoderPos;
@@ -380,7 +379,7 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET
     Serial.println(encoderPos);
     Serial.print(" | Channel: ");
     Serial.println(flag_encoderPos);
-    // ui32_timeout_mqtt=millis()+5000;
+
     timeout_readpzem = millis() + 2000;
     return;
   }
@@ -395,8 +394,6 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET
     else if (menuIndex < 0)
       menuIndex = MAIN_MENU_ITEMS - 1;
 
-    // Serial.print("MENU step="); Serial.print(step);
-    // Serial.print("  menuIndex="); Serial.println(menuIndex);
     return;
   }
 
@@ -410,8 +407,6 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET
     else if (netFieldIndex < 0)
       netFieldIndex = NET_MENU_ITEMS - 1;
 
-    // Serial.print("NET step="); Serial.print(step);
-    // Serial.print("  netFieldIndex="); Serial.println(netFieldIndex);
     return;
   }
 }
@@ -427,14 +422,23 @@ inline void lcdv2_begin()
   pzem.begin();
 #endif
 
+  // Nút nhấn encoder vẫn dùng INPUT_PULLUP như cũ
   pinMode(SW_PIN, INPUT_PULLUP);
 
-  pinALast = digitalRead(CLK_PIN);
-  lastStateCLK = pinALast;
+  // --- KHỞI TẠO CLICKENCODER ---
+  // Thứ tự: (CLK, DT, SW)
+  g_encoder = new ClickEncoder(_PIN, CLK_PIN, SW_PIN);
+
+  // Giảm độ nhạy: tắt acceleration để mỗi nấc nhảy đều
+  g_encoder->setAccelerationEnabled(false);
+
+  // --- TIMER1 GỌI service() MỖI 1ms ---
+  Timer1.initialize(1000); // 1000us = 1ms
+  Timer1.attachInterrupt(lcdv2_encoder_isr);
+
   last_channel = -1;
-  lastStateCLK = pinALast;
-  last_channel = -1;
-  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i) // 4
+
+  for (uint8_t i = 0; i < CHANNEL_COUNT; ++i)
   {
     lastDisplayValid[i] = false;
     lastDisplayValues[i].V = 0;
@@ -499,16 +503,51 @@ inline void lcdv2_handle_button()
 {
   int btnState = digitalRead(SW_PIN);
   static int lastBtnState = HIGH;
+  static unsigned long pressStartMs = 0;
+  static bool longPressHandled = false;
 
-  // phát hiện cạnh xuống: HIGH -> LOW (nhấn nút)
+  unsigned long now = millis();
+
+  // --- PHÁT HIỆN BẮT ĐẦU NHẤN (cạnh xuống) ---
   if (btnState == LOW && lastBtnState == HIGH)
   {
-    // Khử nảy bằng millis
-    if (millis() - lastButtonPress > BUTTON_DEBOUNCE_MS)
-    {
-      lastButtonPress = millis();
+    pressStartMs = now;
+    longPressHandled = false;
+  }
 
-      // ====== TỪ VIEW → MENU ======
+  // --- XỬ LÝ NHẤN GIỮ LÂU (>= 2s) ---
+  if (btnState == LOW && !longPressHandled &&
+      (now - pressStartMs >= BUTTON_LONG_PRESS_MS))
+  {
+    // Chỉ thoát menu nếu đang KHÔNG ở VIEW
+    if (uiMode != UI_MODE_VIEW)
+    {
+      // Thoát hết về VIEW
+      uiMode = UI_MODE_VIEW;
+
+      // Reset các trạng thái edit/confirm của NET CONFIG
+      netEditing = false;
+      netConfirming = false;
+      netConfirmSelection = 0;
+      netEditTarget = nullptr;
+      netEditDigitIndex = 0;
+      lastNetCfgIndex = -1;
+
+      lcd.clear();
+    }
+
+    longPressHandled = true; // Đánh dấu đã xử lý long press
+  }
+
+  // --- PHÁT HIỆN NHẢ NÚT (cạnh lên) ---
+  if (btnState == HIGH && lastBtnState == LOW)
+  {
+    // Nếu long-press đã xử lý rồi → KHÔNG làm short-press nữa
+    if (!longPressHandled && (now - pressStartMs > BUTTON_DEBOUNCE_MS))
+    {
+      // ====== XỬ LÝ NHẤN NGẮN (logic cũ) ======
+
+      // TỪ VIEW → MENU
       if (uiMode == UI_MODE_VIEW)
       {
         uiMode = UI_MODE_MENU;
@@ -516,7 +555,7 @@ inline void lcdv2_handle_button()
         lcd.clear();
       }
 
-      // ====== ĐANG Ở MENU ======
+      // ĐANG Ở MENU CHÍNH
       else if (uiMode == UI_MODE_MENU)
       {
         switch (menuIndex)
@@ -526,35 +565,39 @@ inline void lcdv2_handle_button()
           lcd.clear();
           break;
 
-        case 1: // NET_MENU
+        case 1: // NET_MENU (VIEW thông số mạng)
           uiMode = UI_MODE_NET_MENU;
           netFieldIndex = 0;
           lcd.clear();
           break;
 
-        case 2: // NET CONFIG
+        case 2: // NET CONFIG (chỉnh IP tĩnh)
           uiMode = UI_MODE_NET_IP_CONFIG;
           netFieldIndex = 0;
           lcd.clear();
           break;
 
-        case 3: // EXIT
+        case 3: // EXIT về VIEW
           uiMode = UI_MODE_VIEW;
           lcd.clear();
           break;
         }
       }
+
+      // ĐANG Ở NET MENU (chỉ view thông số mạng)
       else if (uiMode == UI_MODE_NET_MENU)
       {
+        // Nhấn ngắn: quay lại MENU
         uiMode = UI_MODE_MENU;
         lcd.clear();
       }
-      // ====== THOÁT MENU NET ======
-      else if (uiMode == UI_MODE_NET_IP_CONFIG) // <== CHỈ NET CONFIG
+
+      // ĐANG Ở NET CONFIG
+      else if (uiMode == UI_MODE_NET_IP_CONFIG)
       {
         if (netEditing)
         {
-          // đang nhập từng digit → next digit / sang confirm
+          // đang nhập từng digit → next digit / xong octet thì sang confirm
           lcdv2_commit_net_octet();
         }
         else if (netConfirming)
@@ -562,15 +605,18 @@ inline void lcdv2_handle_button()
           // đang ở màn OK / EXIT
           if (netConfirmSelection == 0)
           {
-            // OK
+            // OK → lưu IP, ở lại NET CONFIG
             lcdv2_finish_net_edit();
           }
           else
           {
-            // EXIT: bỏ thay đổi
+            // EXIT: bỏ thay đổi, THOÁT về MENU
             netConfirming = false;
             netEditTarget = nullptr;
             lastNetCfgIndex = -1;
+
+            uiMode = UI_MODE_MENU;
+            lcd.clear();
           }
         }
         else if (netFieldIndex < 4)
@@ -587,7 +633,8 @@ inline void lcdv2_handle_button()
       }
     }
   }
-  // cập nhật trạng thái nút **sau khi** xử lý
+
+  // Cập nhật trạng thái cuối
   lastBtnState = btnState;
 }
 
@@ -745,8 +792,7 @@ inline void lcdv2_show_net_ip_config()
   case 4:
   default:
   {
-    char hostLine[17];
-    lcdv2_print_line(0, hostLine);
+    lcdv2_print_line(0, "MQTT CONFIG");
     snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
     lcdv2_print_line(1, buffer);
     break;
@@ -886,7 +932,7 @@ inline void lcdv2_finish_net_edit()
                              netEditBuffer[2], netEditBuffer[3]);
 
   // áp dụng lại cấu hình Ethernet thực tế
-  apply_network_settings();
+  // apply_network_settings();
 
   netEditing = false;
   netConfirming = false;
