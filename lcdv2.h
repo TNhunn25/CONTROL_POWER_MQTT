@@ -118,13 +118,15 @@ uint8_t netEditDigitIndex = 0;
 uint8_t netEditBuffer[4] = {0};
 char netEditString[16] = {0};
 IPAddress *netEditTarget = nullptr;
+bool netConfirming = false;      // đang ở màn hình OK / EXIT
+uint8_t netConfirmSelection = 0; // 0 = OK, 1 = EXIT
 
 void lcdv2_handle_button();
 void lcdv2_show_main_menu();
 void lcdv2_show_net_menu();
 void lcdv2_show_net_ip_config();
 void lcdv2_print_line(uint8_t row, const char *text);
-void lcdv2_format_ip(const uint8_t octets[4], char *buffer, size_t length);
+void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length);
 IPAddress *lcdv2_get_selected_address();
 void lcdv2_start_edit_net_field();
 void lcdv2_commit_net_octet();
@@ -327,6 +329,28 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET
     // xoay encoder để tăng/giảm từng chữ số 0..9 (quay vòng)
     digit = (digit + step + 10) % 10;
     netEditString[netEditDigitIndex] = static_cast<char>('0' + digit);
+
+    // 👉 VẼ TRỰC TIẾP KÝ TỰ VỪA ĐỔI LÊN LCD CHO NHẠY
+    lcd.setCursor(netEditDigitIndex, 1);
+    lcd.print(netEditString[netEditDigitIndex]);
+    // đặt lại con trỏ tại vị trí đang edit
+    lcd.setCursor(netEditDigitIndex, 1);
+    lcd.cursor();
+
+    return;
+  }
+
+  // ===== ĐANG Ở MÀN HÌNH CONFIRM (OK / EXIT) =====
+  if (uiMode == UI_MODE_NET_IP_CONFIG && netConfirming)
+  {
+    // đổi lựa chọn OK/EXIT theo chiều quay
+    if (step > 0)
+      netConfirmSelection = (netConfirmSelection + 1) % 2;
+    else
+      netConfirmSelection = (netConfirmSelection + 1) % 2; // 2 lựa chọn nên +1 hay -1 rồi mod 2 là như nhau
+
+    // ép vẽ lại màn hình confirm
+    lastNetCfgIndex = -1;
     return;
   }
 
@@ -524,21 +548,37 @@ inline void lcdv2_handle_button()
         lcd.clear();
       }
       // ====== THOÁT MENU NET ======
-      else if (uiMode == UI_MODE_NET_IP_CONFIG)
+      else if (uiMode == UI_MODE_NET_IP_CONFIG) // <== CHỈ NET CONFIG
       {
-        // uiMode = UI_MODE_MENU;
-        // lcd.clear();
-        // ===== ĐANG CHỈNH TỪNG CHỮ SỐ ĐỊA CHỈ MẠNG =====
         if (netEditing)
         {
+          // đang nhập từng digit → next digit / sang confirm
           lcdv2_commit_net_octet();
+        }
+        else if (netConfirming)
+        {
+          // đang ở màn OK / EXIT
+          if (netConfirmSelection == 0)
+          {
+            // OK
+            lcdv2_finish_net_edit();
+          }
+          else
+          {
+            // EXIT: bỏ thay đổi
+            netConfirming = false;
+            netEditTarget = nullptr;
+            lastNetCfgIndex = -1;
+          }
         }
         else if (netFieldIndex < 4)
         {
+          // bắt đầu chỉnh IP/GW/Subnet/DNS
           lcdv2_start_edit_net_field();
         }
         else
         {
+          // mục MQTT hoặc mục cuối → thoát về MENU
           uiMode = UI_MODE_MENU;
           lcd.clear();
         }
@@ -584,7 +624,7 @@ inline void lcdv2_show_net_menu()
   static int lastNetIndex = -1;
   if (netFieldIndex == lastNetIndex)
   {
-    return; // không đổi mục → không cần vẽ lại
+    return; // không đổi mục → khỏi vẽ lại
   }
   lastNetIndex = netFieldIndex;
 
@@ -593,59 +633,48 @@ inline void lcdv2_show_net_menu()
 
   switch (netFieldIndex)
   {
-  case 0:
+  case 0: // IP đang chạy
     lcdv2_print_line(0, "IP (VIEW)");
     lcdv2_format_ip(Ethernet.localIP(), buffer, sizeof(buffer));
     lcdv2_print_line(1, buffer);
     break;
-  case 1:
+
+  case 1: // Gateway cấu hình
     lcdv2_print_line(0, "GATEWAY (VIEW)");
     lcdv2_format_ip(gateway, buffer, sizeof(buffer));
     lcdv2_print_line(1, buffer);
     break;
-  case 2:
+
+  case 2: // Subnet cấu hình
     lcdv2_print_line(0, "SUBNET (VIEW)");
     lcdv2_format_ip(subnet, buffer, sizeof(buffer));
     lcdv2_print_line(1, buffer);
     break;
-  case 3:
+
+  case 3: // DNS cấu hình
     lcdv2_print_line(0, "DNS (VIEW)");
     lcdv2_format_ip(dns, buffer, sizeof(buffer));
     lcdv2_print_line(1, buffer);
     break;
-  case 4:
+
+  case 4: // MQTT port
   default:
-  {
-    char hostLine[17];
-    // if (mqtt_server != nullptr)
-    // {
-    //   snprintf(hostLine, sizeof(hostLine), "MQTT VIEW:%s", mqtt_server);
-    // }
-    // else
-    // {
-    //   snprintf(hostLine, sizeof(hostLine), "MQTT VIEW: N/A");
-    // }
-    // lcdv2_print_line(0, hostLine);
+    lcdv2_print_line(0, "MQTT VIEW");
     snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
     lcdv2_print_line(1, buffer);
     break;
-  }
   }
 }
 
 inline void lcdv2_show_net_ip_config()
 {
-  // static int lastNetCfgIndex = -1;
-  // if (netFieldIndex == lastNetCfgIndex)
-  if (netFieldIndex == lastNetCfgIndex && !netEditing)
-  {
-    return;
-  }
+
   lastNetCfgIndex = netFieldIndex;
 
   char buffer[17];
   buffer[0] = '\0';
 
+  // --- ĐANG EDIT TỪNG CHỮ SỐ ---
   if (netEditing)
   {
     const char *titles[] = {"SUA IP", "SUA GW", "SUA SUB", "SUA DNS", "MQTT"};
@@ -659,46 +688,52 @@ inline void lcdv2_show_net_ip_config()
 
   lcd.noCursor();
 
+  // --- ĐANG Ở MÀN HÌNH OK / EXIT ---
+  if (netConfirming)
+  {
+    lcdv2_print_line(0, "OK?");
+    lcdv2_print_line(1, "OK   EXIT");
+
+    if (netConfirmSelection == 0)
+    {
+      lcd.setCursor(0, 1); // trỏ vào "OK"
+    }
+    else
+    {
+      lcd.setCursor(6, 1); // trỏ vào "EXIT"
+    }
+    lcd.cursor();
+    return;
+  }
+
+  // // --- BÌNH THƯỜNG: MÀN HÌNH NET CONFIG CHƯA EDIT ---
   // switch (netFieldIndex)
   // {
-  // case 0:
-  //   lcdv2_print_line(0, "IP ADDRESS");
-  //   lcdv2_format_ip(ip, buffer, sizeof(buffer));
-  //   lcdv2_print_line(1, buffer);
+  // case 0: // IP
+  //   lcdv2_print_line(0, "SET IP");
+  //   lcdv2_print_line(1, "000.000.000.000");
   //   break;
-  // case 1:
-  //   lcdv2_print_line(0, "GATEWAY");
-  //   lcdv2_format_ip(gateway, buffer, sizeof(buffer));
-  //   lcdv2_print_line(1, buffer);
+
+  // case 1: // Gateway
+  //   lcdv2_print_line(0, "SET GATEWAY");
+  //   lcdv2_print_line(1, "000.000.000.000");
   //   break;
-  // case 2:
-  //   lcdv2_print_line(0, "SUBNET");
-  //   lcdv2_format_ip(subnet, buffer, sizeof(buffer));
-  //   lcdv2_print_line(1, buffer);
+
+  // case 2: // Subnet
+  //   lcdv2_print_line(0, "SET SUBNET");
+  //   lcdv2_print_line(1, "000.000.000.000");
   //   break;
-  // case 3:
-  //   lcdv2_print_line(0, "DNS SERVER");
-  //   lcdv2_format_ip(dns, buffer, sizeof(buffer));
-  //   lcdv2_print_line(1, buffer);
+
+  // case 3: // DNS
+  //   lcdv2_print_line(0, "SET DNS");
+  //   lcdv2_print_line(1, "000.000.000.000");
   //   break;
-  // case 4:
+
+  // case 4: // MQTT (tạm thời chưa config chi tiết)
   // default:
-  // {
-  //   char hostLine[17];
-  //   // hiển thị máy chủ MQTT
-  //   // if (mqtt_server != nullptr)
-  //   // {
-  //   //   snprintf(hostLine, sizeof(hostLine), "MQTT:%s", mqtt_server);
-  //   // }
-  //   // else
-  //   // {
-  //   //   snprintf(hostLine, sizeof(hostLine), "MQTT:N/A");
-  //   // }
-  //   // lcdv2_print_line(0, hostLine);
-  //   snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
-  //   lcdv2_print_line(1, buffer);
+  //   lcdv2_print_line(0, "MQTT CONFIG");
+  //   lcdv2_print_line(1, "PRESS TO EXIT ");
   //   break;
-  // }
   // }
 }
 
@@ -714,13 +749,13 @@ inline void lcdv2_print_line(uint8_t row, const char *text)
   }
 }
 
-inline void lcdv2_format_ip(const uint8_t octets[4], char *buffer, size_t length)
+inline void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length)
 {
-  if (length == 0 || buffer == nullptr)
-  {
+  if (!buffer || length == 0)
     return;
-  }
-  snprintf(buffer, length, "%u.%u.%u.%u", octets[0], octets[1], octets[2], octets[3]);
+
+  snprintf(buffer, length, "%u.%u.%u.%u",
+           addr[0], addr[1], addr[2], addr[3]);
 }
 
 inline IPAddress *lcdv2_get_selected_address()
@@ -767,26 +802,46 @@ inline void lcdv2_finish_net_edit()
   if (netEditTarget == nullptr)
   {
     netEditing = false;
+    netConfirming = false;
     return;
   }
 
-  netEditBuffer[0] = static_cast<uint8_t>((netEditString[0] - '0') * 100 + (netEditString[1] - '0') * 10 + (netEditString[2] - '0'));
-  netEditBuffer[1] = static_cast<uint8_t>((netEditString[4] - '0') * 100 + (netEditString[5] - '0') * 10 + (netEditString[6] - '0'));
-  netEditBuffer[2] = static_cast<uint8_t>((netEditString[8] - '0') * 100 + (netEditString[9] - '0') * 10 + (netEditString[10] - '0'));
-  netEditBuffer[3] = static_cast<uint8_t>((netEditString[12] - '0') * 100 + (netEditString[13] - '0') * 10 + (netEditString[14] - '0'));
+  // parse chuỗi "NNN.NNN.NNN.NNN" thành 4 octet
+  netEditBuffer[0] = static_cast<uint8_t>(
+      (netEditString[0] - '0') * 100 +
+      (netEditString[1] - '0') * 10 +
+      (netEditString[2] - '0'));
+
+  netEditBuffer[1] = static_cast<uint8_t>(
+      (netEditString[4] - '0') * 100 +
+      (netEditString[5] - '0') * 10 +
+      (netEditString[6] - '0'));
+
+  netEditBuffer[2] = static_cast<uint8_t>(
+      (netEditString[8] - '0') * 100 +
+      (netEditString[9] - '0') * 10 +
+      (netEditString[10] - '0'));
+
+  netEditBuffer[3] = static_cast<uint8_t>(
+      (netEditString[12] - '0') * 100 +
+      (netEditString[13] - '0') * 10 +
+      (netEditString[14] - '0'));
 
   for (uint8_t i = 0; i < 4; ++i)
   {
     if (netEditBuffer[i] > 255)
-    {
       netEditBuffer[i] = 255;
-    }
   }
 
-  *netEditTarget = IPAddress(netEditBuffer[0], netEditBuffer[1], netEditBuffer[2], netEditBuffer[3]);
+  *netEditTarget = IPAddress(netEditBuffer[0], netEditBuffer[1],
+                             netEditBuffer[2], netEditBuffer[3]);
+
+  // áp dụng lại cấu hình Ethernet thực tế
   apply_network_settings();
 
   netEditing = false;
+  netConfirming = false;
+  netConfirmSelection = 0;
   netEditTarget = nullptr;
   netEditDigitIndex = 0;
   lastNetCfgIndex = -1;
@@ -796,21 +851,28 @@ inline void lcdv2_finish_net_edit()
 inline void lcdv2_commit_net_octet()
 {
   if (!netEditing)
-  {
     return;
-  }
 
+  uint8_t len = strlen(netEditString);
+
+  // nhảy qua các vị trí '.' tới digit tiếp theo
   do
   {
     ++netEditDigitIndex;
-  } while (netEditDigitIndex < sizeof(netEditString) - 1 && netEditString[netEditDigitIndex] == '.');
+  } while (netEditDigitIndex < len && netEditString[netEditDigitIndex] == '.');
 
-  if (netEditDigitIndex >= sizeof(netEditString) - 1)
+  // nếu đã hết tất cả digit → chuyển sang màn hình confirm OK / EXIT
+  if (netEditDigitIndex >= len)
   {
-    lcdv2_finish_net_edit();
+    netEditing = false;
+    netConfirming = true;
+    netConfirmSelection = 0; // mặc định chọn OK
+    lcd.noCursor();
+    lastNetCfgIndex = -1; // buộc vẽ lại màn hình OK/EXIT
     return;
   }
 
+  // còn digit → đưa con trỏ tới đó
   lcd.setCursor(netEditDigitIndex, 1);
 }
 
