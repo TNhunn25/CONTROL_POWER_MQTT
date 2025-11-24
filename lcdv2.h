@@ -2,6 +2,7 @@
 #include <LiquidCrystal_I2C.h>
 #include <Ethernet.h>
 #include "HC4052.h"
+#include <string.h>
 #include "Hshopvn_Pzem004t_V2.h"
 #include <KY040.h>
 
@@ -343,15 +344,16 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET
   // ===== ĐANG Ở MÀN HÌNH CONFIRM (OK / EXIT) =====
   if (uiMode == UI_MODE_NET_IP_CONFIG && netConfirming)
   {
-    // đổi lựa chọn OK/EXIT theo chiều quay
-    if (step > 0)
-      netConfirmSelection = (netConfirmSelection + 1) % 2;
-    else
-      netConfirmSelection = (netConfirmSelection + 1) % 2; // 2 lựa chọn nên +1 hay -1 rồi mod 2 là như nhau
+    // chỉ xử lý khi thực sự có step
+    if (step != 0)
+    {
+      // 0 <-> 1 (OK <-> EXIT)
+      netConfirmSelection ^= 1;
 
-    // ép vẽ lại màn hình confirm
-    lastNetCfgIndex = -1;
-    return;
+      // vẽ lại ngay màn hình OK / EXIT
+      lcdv2_show_net_ip_config();
+    }
+    return; // không cho rơi xuống các mode khác
   }
 
   // ===== VIEW MODE: giữ behavior cũ để đổi màn hình CH =====
@@ -668,8 +670,52 @@ inline void lcdv2_show_net_menu()
 
 inline void lcdv2_show_net_ip_config()
 {
+  static bool lastEditing = false;
+  static bool lastConfirming = false;
+  static uint8_t lastConfirmSelection = 0;
+  static uint8_t lastEditDigitIndex = 0;
+  static char lastEditString[16] = "";
+
+  const bool editStringChanged = netEditing && (strcmp(lastEditString, netEditString) != 0);
+  const bool digitMoved = netEditing && (netEditDigitIndex != lastEditDigitIndex);
+  const bool confirmingChanged = netConfirming && (netConfirmSelection != lastConfirmSelection);
+  const bool needRedraw = (netFieldIndex != lastNetCfgIndex) ||
+                          (netEditing != lastEditing) ||
+                          (netConfirming != lastConfirming) ||
+                          editStringChanged ||
+                          digitMoved ||
+                          confirmingChanged;
+
+  if (!needRedraw)
+  {
+    // giữ nguyên con trỏ khi không cần vẽ lại toàn màn hình
+    if (netEditing)
+    {
+      lcd.setCursor(netEditDigitIndex, 1);
+      lcd.cursor();
+    }
+    else if (netConfirming)
+    {
+      lcd.setCursor(netConfirmSelection == 0 ? 0 : 6, 1);
+      lcd.cursor();
+    }
+    return;
+  }
 
   lastNetCfgIndex = netFieldIndex;
+  lastEditing = netEditing;
+  lastConfirming = netConfirming;
+  lastConfirmSelection = netConfirmSelection;
+  lastEditDigitIndex = netEditDigitIndex;
+  if (netEditing)
+  {
+    strncpy(lastEditString, netEditString, sizeof(lastEditString));
+    lastEditString[sizeof(lastEditString) - 1] = '\0';
+  }
+  else
+  {
+    lastEditString[0] = '\0';
+  }
 
   char buffer[17];
   buffer[0] = '\0';
@@ -705,36 +751,6 @@ inline void lcdv2_show_net_ip_config()
     lcd.cursor();
     return;
   }
-
-  // // --- BÌNH THƯỜNG: MÀN HÌNH NET CONFIG CHƯA EDIT ---
-  // switch (netFieldIndex)
-  // {
-  // case 0: // IP
-  //   lcdv2_print_line(0, "SET IP");
-  //   lcdv2_print_line(1, "000.000.000.000");
-  //   break;
-
-  // case 1: // Gateway
-  //   lcdv2_print_line(0, "SET GATEWAY");
-  //   lcdv2_print_line(1, "000.000.000.000");
-  //   break;
-
-  // case 2: // Subnet
-  //   lcdv2_print_line(0, "SET SUBNET");
-  //   lcdv2_print_line(1, "000.000.000.000");
-  //   break;
-
-  // case 3: // DNS
-  //   lcdv2_print_line(0, "SET DNS");
-  //   lcdv2_print_line(1, "000.000.000.000");
-  //   break;
-
-  // case 4: // MQTT (tạm thời chưa config chi tiết)
-  // default:
-  //   lcdv2_print_line(0, "MQTT CONFIG");
-  //   lcdv2_print_line(1, "PRESS TO EXIT ");
-  //   break;
-  // }
 }
 
 inline void lcdv2_print_line(uint8_t row, const char *text)
