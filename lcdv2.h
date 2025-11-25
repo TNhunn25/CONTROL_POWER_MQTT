@@ -427,7 +427,7 @@ inline void lcdv2_begin()
 
   // --- KHỞI TẠO CLICKENCODER ---
   // Thứ tự: (CLK, DT, SW)
-  g_encoder = new ClickEncoder(_PIN, CLK_PIN, SW_PIN);
+  g_encoder = new ClickEncoder(DT_PIN, CLK_PIN, SW_PIN);
 
   // Giảm độ nhạy: tắt acceleration để mỗi nấc nhảy đều
   g_encoder->setAccelerationEnabled(false);
@@ -512,7 +512,7 @@ inline void lcdv2_handle_button()
   if (btnState == LOW && lastBtnState == HIGH)
   {
     pressStartMs = now;
-    longPressHandled = false;
+    longPressHandled = false; // chuẩn bị cho 1 lần bấm mới
   }
 
   // --- XỬ LÝ NHẤN GIỮ LÂU (>= 2s) ---
@@ -545,7 +545,7 @@ inline void lcdv2_handle_button()
     // Nếu long-press đã xử lý rồi → KHÔNG làm short-press nữa
     if (!longPressHandled && (now - pressStartMs > BUTTON_DEBOUNCE_MS))
     {
-      // ====== XỬ LÝ NHẤN NGẮN (logic cũ) ======
+      // ====== XỬ LÝ NHẤN NGẮN ======
 
       // TỪ VIEW → MENU
       if (uiMode == UI_MODE_VIEW)
@@ -631,6 +631,9 @@ inline void lcdv2_handle_button()
           lcd.clear();
         }
       }
+
+      //RẤT QUAN TRỌNG: đánh dấu đã xử lý xong nhấn ngắn cho lần bấm này
+      longPressHandled = true;
     }
   }
 
