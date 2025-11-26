@@ -4,7 +4,6 @@
 #include "HC4052.h"
 #include <string.h>
 #include "Hshopvn_Pzem004t_V2.h"
-// #include <KY040.h>
 #include <ClickEncoder.h>
 #include <TimerOne.h>
 
@@ -12,20 +11,19 @@ extern IPAddress ip;
 extern IPAddress gateway;
 extern IPAddress subnet;
 extern IPAddress dns;
+// extern int mqtt_port;
 extern int mqtt_port;
-extern const char *mqtt_server;
+extern char *mqtt_server;
+extern bool telemetryDirty;
+extern uint8_t nextPublishChannel;
 
 void apply_network_settings();
+void persistNetworkConfig();
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-int currentStateCLK;
-int lastStateCLK;
-String currentDir = "";
-unsigned long lastButtonPress = 0;
 
 #define CLK_PIN 47 // aka. A
 #define DT_PIN 48  // aka. BF
-// KY040 g_rotaryEncoder(CLK_PIN, DT_PIN);
 
 // Con trỏ encoder dùng chung cho lcdv2
 ClickEncoder *g_encoder = nullptr;
@@ -42,28 +40,21 @@ void lcdv2_encoder_isr()
 unsigned long lastTelemetryMs = 0;
 int encoderPos = 0;
 int flag_encoderPos = 0;
-int pinALast, aVal;
-bool bCW;
 unsigned long lastReadMs = 0;
 #define MUX_A 28
 #define MUX_B 27
 HC4052 mux(MUX_A, MUX_B);
-unsigned long ui32_timeout_mqtt;
-static uint8_t lastA = HIGH;
-static bool validating = false;
-static unsigned long t0 = 0;
-static uint8_t a_locked = HIGH; // giá trị A tại thời điểm bắt đầu kiểm tra
-static uint8_t b_relation = 0;  // 0: (B==A), 1: (B!=A)
-unsigned long timeout_readpzem;
-const unsigned long HOLD_MS = 3; // thời gian phải duy trì điều kiện (3–8 ms tuỳ nhiễu)
-const int Auto = 30;             // Doc trang thai Auto Man
+const int Auto = 30; // Doc trang thai Auto Man
 const int Man = 31;
+// Pin nút nhấn encoder
+#define SW_PIN 49
+unsigned long ui32_timeout_mqtt;
+unsigned long timeout_readpzem;
 const uint8_t RELAY_COUNT = 4;
 const uint8_t CHANNEL_COUNT = 5;        // tổng cộng 5 kênh tính cả kênh 0 (Tatal CH)
 const uint8_t DISPLAY_SCREEN_COUNT = 6; // 5 kênh đo + 1 trang trạng thái relay
 bool autoModeEnabled;
 int lastRelayStates[RELAY_COUNT] = {-1};
-unsigned long lastDisplayUpdateMs = 0;
 int relayStates[RELAY_COUNT] = {0};
 
 #define UART_PZEM Serial3
@@ -93,9 +84,6 @@ const int NET_MENU_ITEMS = 5; // IP, Gateway, Subnet, DNS, MQTT
 // Lưu vết mục NET CONFIG đã vẽ lần cuối để tránh refresh không cần thiết
 int lastNetCfgIndex = -1;
 
-// Pin nút nhấn encoder
-#define SW_PIN 49
-
 const unsigned long BUTTON_DEBOUNCE_MS = 20;
 const unsigned long BUTTON_LONG_PRESS_MS = 2000; // 2 giây nhấn giữ để thoát menu
 
@@ -113,6 +101,7 @@ void lcdv2_show_net_menu();
 void lcdv2_show_net_ip_config();
 void lcdv2_print_line(uint8_t row, const char *text);
 void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length);
+void lcdv2_show_hint(const char *line1, const char *line2);
 IPAddress *lcdv2_get_selected_address();
 void lcdv2_start_edit_net_field();
 void lcdv2_commit_net_octet();
@@ -386,7 +375,7 @@ inline void lcdv2_begin()
   pinMode(SW_PIN, INPUT_PULLUP);
 
   // --- KHỞI TẠO CLICKENCODER ---
-  // Thứ tự: (CLK, DT, SW)
+  // Thứ tự: (DT, CLK, SW)
   g_encoder = new ClickEncoder(DT_PIN, CLK_PIN, SW_PIN);
 
   // Giảm độ nhạy: tắt acceleration để mỗi nấc nhảy đều
@@ -405,7 +394,7 @@ inline void lcdv2_begin()
     lastDisplayValues[i].I = 0;
     lastDisplayValues[i].P = 0;
   }
-  lastReadMs = millis() + 1000;
+  // lastReadMs = millis() + 1000;
 }
 
 //-----------------------------------
@@ -446,17 +435,17 @@ inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
   }
 }
 
-inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
-{
-  if (lastReadMs <= millis())
-  {
-    for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
-    {
-      read_pzem_channel(i, ch[i]);
-    }
-    lastReadMs = millis() + 500;
-  }
-}
+// inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
+// {
+//   if (lastReadMs <= millis())
+//   {
+//     for (uint8_t i = 0; i < CHANNEL_COUNT; i++)
+//     {
+//       read_pzem_channel(i, ch[i]);
+//     }
+//     lastReadMs = millis() + 500;
+//   }
+// }
 
 extern unsigned long lastSensorPollMs;
 
@@ -498,7 +487,8 @@ inline void lcdv2_handle_button()
       netEditDigitIndex = 0;
       lastNetCfgIndex = -1;
 
-      lcd.clear();
+      // lcd.clear();
+      lcdv2_show_hint("BACK TO VIEW", "Turn to view CH");
     }
 
     longPressHandled = true; // Đánh dấu đã xử lý long press
@@ -517,7 +507,8 @@ inline void lcdv2_handle_button()
       {
         uiMode = UI_MODE_MENU;
         menuIndex = 0;
-        lcd.clear();
+        // lcd.clear();
+        lcdv2_show_hint("MENU", "Turn to select");
       }
 
       // ĐANG Ở MENU CHÍNH
@@ -527,24 +518,28 @@ inline void lcdv2_handle_button()
         {
         case 0: // VIEW
           uiMode = UI_MODE_VIEW;
-          lcd.clear();
+          // lcd.clear();
+          lcdv2_show_hint("VIEW MODE", "Turn to change");
           break;
 
         case 1: // NET_MENU (VIEW thông số mạng)
           uiMode = UI_MODE_NET_MENU;
           netFieldIndex = 0;
-          lcd.clear();
+          // lcd.clear();
+          lcdv2_show_hint("NET VIEW", "Turn to change");
           break;
 
         case 2: // NET CONFIG (chỉnh IP tĩnh)
           uiMode = UI_MODE_NET_IP_CONFIG;
           netFieldIndex = 0;
-          lcd.clear();
+          // lcd.clear();
+          lcdv2_show_hint("NET CONFIG", "Press to edit IP");
           break;
 
         case 3: // EXIT về VIEW
           uiMode = UI_MODE_VIEW;
-          lcd.clear();
+          // lcd.clear();
+          lcdv2_show_hint("EXIT MENU", "Turn to view CH");
           break;
         }
       }
@@ -554,7 +549,8 @@ inline void lcdv2_handle_button()
       {
         // Nhấn ngắn: quay lại MENU
         uiMode = UI_MODE_MENU;
-        lcd.clear();
+        // lcd.clear();
+        lcdv2_show_hint("MENU", "Turn to select");
       }
 
       // ĐANG Ở NET CONFIG
@@ -572,6 +568,8 @@ inline void lcdv2_handle_button()
           {
             // OK → lưu IP, ở lại NET CONFIG
             lcdv2_finish_net_edit();
+            // rời màn hình confirm về MENU chính để tránh kẹt ở "OK / EXIT"
+            uiMode = UI_MODE_MENU;
           }
           else
           {
@@ -579,9 +577,11 @@ inline void lcdv2_handle_button()
             netConfirming = false;
             netEditTarget = nullptr;
             lastNetCfgIndex = -1;
+            netEditDigitIndex = 0;
 
             uiMode = UI_MODE_MENU;
-            lcd.clear();
+            // lcd.clear();
+            lcdv2_show_hint("MENU", "Turn to select");
           }
         }
         else if (netFieldIndex < 4)
@@ -593,7 +593,8 @@ inline void lcdv2_handle_button()
         {
           // mục MQTT hoặc mục cuối → thoát về MENU
           uiMode = UI_MODE_MENU;
-          lcd.clear();
+          // lcd.clear();
+          lcdv2_show_hint("MENU", "Turn to select");
         }
       }
 
@@ -759,7 +760,7 @@ inline void lcdv2_show_net_ip_config()
     lcdv2_print_line(1, buffer);
     break;
   case 4:
-    lcdv2_print_line(0, "MQTT CONFIG");
+    lcdv2_print_line(0, "MQTT PORT");
     snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
     lcdv2_print_line(1, buffer);
     break;
@@ -768,7 +769,7 @@ inline void lcdv2_show_net_ip_config()
   // --- ĐANG EDIT TỪNG CHỮ SỐ ---
   if (netEditing)
   {
-    const char *titles[] = {"CONFIG IP", "CONFIG GW", "CONFIG SUB", "CONFIG DNS", "MQTT"};
+    const char *titles[] = {"SET IP", "SET GW", "SET SUB", "SET DNS", "SET PORT"};
     lcdv2_print_line(0, titles[netFieldIndex]);
     lcdv2_print_line(1, netEditString);
 
@@ -808,6 +809,13 @@ inline void lcdv2_print_line(uint8_t row, const char *text)
     lcd.print(' ');
     ++len;
   }
+}
+
+inline void lcdv2_show_hint(const char *line1, const char *line2)
+{
+  lcd.clear();
+  lcdv2_print_line(0, line1);
+  lcdv2_print_line(1, line2 ? line2 : "");
 }
 
 inline void lcdv2_format_ip(const IPAddress &addr, char *buffer, size_t length)
@@ -899,6 +907,11 @@ inline void lcdv2_finish_net_edit()
 
   // áp dụng lại cấu hình Ethernet thực tế
   apply_network_settings();
+  persistNetworkConfig();
+
+  // Đánh dấu telemetry cần gửi lại ngay lập tức để phản ánh IP mới
+  telemetryDirty = true;
+  nextPublishChannel = 0;
 
   netEditing = false;
   netConfirming = false;

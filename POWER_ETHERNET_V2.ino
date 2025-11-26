@@ -7,6 +7,7 @@
 
 #include "POWER_AUTO.h"
 #include "lcdv2.h"
+#include "serial_config.h"
 
 #define LCDV2_EMBEDDED
 // ===== Static IP Config =====
@@ -16,11 +17,11 @@ IPAddress dns(8, 8, 8, 8);
 IPAddress gateway(192, 168, 80, 254);
 IPAddress subnet(255, 255, 255, 0);
 // ===== MQTT Info =====
-const char *mqtt_server = "mqtt.dev.altasoftware.vn";
+char *mqtt_server = "mqtt.dev.altasoftware.vn";
 int mqtt_port = 1883;
-const char *mqtt_user = "altamedia";
-const char *mqtt_password = "Altamedia@%";
-const char *mqtt_client_id = "DEMO_CONTROL_POWER_2025";
+char *mqtt_user = "altamedia";
+char *mqtt_password = "Altamedia@%";
+char *mqtt_client_id = "DEMO_CONTROL_POWER_2025";
 
 const char *topic_test_pub = "CRL_POWER/STATUS";
 const char *topic_cmd_sub = "CRL_POWER/command";
@@ -34,12 +35,10 @@ PubSubClient mqttClient(ethClient);
 // Bộ đệm chia sẻ để lưu chữ ký MD5 cho bản tin MQTT.
 char data_MQTT[100] = {0};
 
-// void apply_network_settings()
-// {
-//   Ethernet.begin(mac, ip, dns, gateway, subnet);
-//   mqttClient.setServer(mqtt_server, mqtt_port);
-// }
-
+// Áp dụng cấu hình mạng đang lưu trong biến ip/gateway/subnet/dns/mqtt_port
+//  - Khởi động lại Ethernet với thông số mới
+//  - Ngắt kết nối MQTT hiện tại và trỏ về server/port mới
+//  - In log để dễ kiểm tra thực tế trên Serial
 void apply_network_settings()
 {
   Ethernet.begin(mac, ip, dns, gateway, subnet);
@@ -71,6 +70,14 @@ const int EEPROM_ENERGY_BASE_ADDR = EEPROM_RELAY_BASE_ADDR + RELAY_COUNT;
 const int EEPROM_ENERGY_SIGNATURE_ADDR = EEPROM_ENERGY_BASE_ADDR + (MEASUREMENT_COUNT * sizeof(float));
 const uint8_t EEPROM_ENERGY_SIGNATURE = 0x5A;
 const float NGUONG_LUU_NANG_LUONG = 0.01f; // kWh
+//--Lưu cấu hình IP
+const uint8_t EEPROM_NET_SIGNATURE = 0xC3;
+const int EEPROM_NET_SIGNATURE_ADDR = EEPROM_ENERGY_SIGNATURE_ADDR + 1;
+const int EEPROM_NET_IP_ADDR = EEPROM_NET_SIGNATURE_ADDR + 1;
+const int EEPROM_NET_GATEWAY_ADDR = EEPROM_NET_IP_ADDR + 4;
+const int EEPROM_NET_SUBNET_ADDR = EEPROM_NET_GATEWAY_ADDR + 4;
+const int EEPROM_NET_DNS_ADDR = EEPROM_NET_SUBNET_ADDR + 4;
+const int EEPROM_NET_MQTT_PORT_ADDR = EEPROM_NET_DNS_ADDR + 4;
 
 // //----------------
 // const int Auto = 30; // doc trang thai auto man
@@ -84,7 +91,6 @@ byte Relay[] = {5, 6, 8, 11, 41, 37, 35, 33};
 byte ReadRelay[] = {3, 7, 10, 12, 40, 36, 34, 32};
 byte sorelay;
 
-int vitrirelay = 0;
 //-------------------
 
 // Trạng thái xuất relay và số liệu đo mô phỏng.
@@ -99,7 +105,7 @@ uint32_t sequenceCounters[RELAY_COUNT] = {0};
 
 // Khoảng thời gian gửi dữ liệu và hệ số đổi ra giờ.
 const unsigned long TELEMETRY_INTERVAL_MS = 30000UL;
-const unsigned long SENSOR_POLL_INTERVAL_MS = 2000UL;
+const unsigned long SENSOR_POLL_INTERVAL_MS = 3000UL;
 // thời gian chờ giữa các relay khi bật tuần tự (ms)
 const unsigned long TIME_CHO_MOI_KENH_MS = 3000UL;
 
@@ -136,6 +142,9 @@ void docNangLuongTuEEPROM();
 void luuNangLuongVaoEEPROM(uint8_t chiSo, float giaTriMoi);
 void dongBoTrangThaiRelayTuPhanCung();
 void batRelayTheoThuTu(); // MAN -> AUTO: bật lại relay theo thứ tự, dựa trên trạng thái đang lưu trong relayStates[]
+//--Lưu cấu hình IP
+void loadNetworkConfig();
+void persistNetworkConfig();
 
 void callback(char *topic, byte *payload, unsigned int len)
 {
@@ -343,7 +352,7 @@ void setup()
   Serial.begin(9600);
   delay(100);
   lcdv2_begin();
-  lcd.setCursor(0, 0);
+  lcdv2_show_hint("Starting...", "Waiting for CH");
   setupTime = millis();
   Serial.println(F("\n[SYS] Booting POWER_ETHERNET_V2"));
   Ethernet.init(53);
@@ -353,13 +362,19 @@ void setup()
   pzemTong.begin();
   pzemTong.setTimeout(100);
 
+  loadNetworkConfig(); //Cấu hình IP
+  // Áp dụng cấu hình IP khôi phục từ EEPROM hoặc giá trị mặc định
+  apply_network_settings();
+
   Ethernet.begin(mac, ip, dns, gateway, subnet);
   pzem.begin(); // PZEM V2 không setAddress, MUX để cô lập từng con
-  Serial.println(F("PZEM-004T V2 + 74HC4052 + HC4052 lib"));
+  // Serial.println(F("PZEM-004T V2 + 74HC4052 + HC4052 lib"));
   Serial.println(F("Starting Ethernet (STATIC)..."));
 
   Serial.print(F("IP: "));
   Serial.println(Ethernet.localIP());
+
+  serialInitNetworkConfig();
 
   Serial.println(F("[SYS] Setup complete, waiting for MQTT"));
 
@@ -420,6 +435,7 @@ void setup()
 void loop()
 {
   unsigned long now = millis();
+  serialTick(); //cấu hình ip bằng đường serial
   if (!mqttClient.connected())
   {
     reconnectMQTT();
@@ -699,10 +715,10 @@ void publishMeasurements(bool publishAll)
       if (ui32_timeout_mqtt <= millis())
       {
         mqttClient.publish(topic_test_pub, (const uint8_t *)payload, strlen(payload), false);
-        Serial.print("[MQTT] TX: ");
-        Serial.println(payload);
-        Serial.print("[MQTT] KEY: ");
-        Serial.println(data_MQTT);
+        // Serial.print("[MQTT] TX: ");
+        // Serial.println(payload);
+        // Serial.print("[MQTT] KEY: ");
+        // Serial.println(data_MQTT);
       }
 
       lastPublishedVoltages[0] = voltages[0];
@@ -931,3 +947,57 @@ void batRelayTheoThuTu()
     }
   }
 }
+
+//--Cấu hình IP
+static void writeIPAddressToEEPROM(int addr, const IPAddress &address)
+{
+  for (uint8_t i = 0; i < 4; ++i)
+  {
+    EEPROM.update(addr + i, address[i]);
+  }
+}
+
+static void readIPAddressFromEEPROM(int addr, IPAddress &address)
+{
+  uint8_t octets[4];
+  for (uint8_t i = 0; i < 4; ++i)
+  {
+    octets[i] = EEPROM.read(addr + i);
+  }
+  address = IPAddress(octets[0], octets[1], octets[2], octets[3]);
+}
+
+void persistNetworkConfig()
+{
+  EEPROM.update(EEPROM_NET_SIGNATURE_ADDR, EEPROM_NET_SIGNATURE);
+  writeIPAddressToEEPROM(EEPROM_NET_IP_ADDR, ip);
+  writeIPAddressToEEPROM(EEPROM_NET_GATEWAY_ADDR, gateway);
+  writeIPAddressToEEPROM(EEPROM_NET_SUBNET_ADDR, subnet);
+  writeIPAddressToEEPROM(EEPROM_NET_DNS_ADDR, dns);
+  EEPROM.put(EEPROM_NET_MQTT_PORT_ADDR, mqtt_port);
+}
+
+// Kiểm tra trong EEPROM đã có cấu hình mạng hợp lệ hay chưa
+static bool coCauHinhMangTrongEEPROM()
+{
+  return EEPROM.read(EEPROM_NET_SIGNATURE_ADDR) == EEPROM_NET_SIGNATURE;
+}
+
+void loadNetworkConfig()
+{
+  // Nếu đã từng lưu, đọc lại vào biến cấu hình hiện tại
+  if (coCauHinhMangTrongEEPROM())
+  {
+    readIPAddressFromEEPROM(EEPROM_NET_IP_ADDR, ip);
+    readIPAddressFromEEPROM(EEPROM_NET_GATEWAY_ADDR, gateway);
+    readIPAddressFromEEPROM(EEPROM_NET_SUBNET_ADDR, subnet);
+    readIPAddressFromEEPROM(EEPROM_NET_DNS_ADDR, dns);
+    EEPROM.get(EEPROM_NET_MQTT_PORT_ADDR, mqtt_port);
+  }
+  else
+  {
+    // Chưa có chữ ký → ghi giá trị mặc định ban đầu để lần sau có thể khôi phục
+    persistNetworkConfig();
+  }
+}
+//----------------------------------------------
