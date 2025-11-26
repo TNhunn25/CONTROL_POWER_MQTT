@@ -99,7 +99,7 @@ uint32_t sequenceCounters[RELAY_COUNT] = {0};
 
 // Khoảng thời gian gửi dữ liệu và hệ số đổi ra giờ.
 const unsigned long TELEMETRY_INTERVAL_MS = 30000UL;
-const unsigned long SENSOR_POLL_INTERVAL_MS = 1000UL;
+const unsigned long SENSOR_POLL_INTERVAL_MS = 2000UL;
 // thời gian chờ giữa các relay khi bật tuần tự (ms)
 const unsigned long TIME_CHO_MOI_KENH_MS = 3000UL;
 

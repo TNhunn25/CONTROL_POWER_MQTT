@@ -96,7 +96,7 @@ int lastNetCfgIndex = -1;
 // Pin nút nhấn encoder
 #define SW_PIN 49
 
-const unsigned long BUTTON_DEBOUNCE_MS = 80;
+const unsigned long BUTTON_DEBOUNCE_MS = 20;
 const unsigned long BUTTON_LONG_PRESS_MS = 2000; // 2 giây nhấn giữ để thoát menu
 
 bool netEditing = false;
@@ -244,46 +244,6 @@ void lcdshowchannelstate(int channel)
   }
 }
 
-// void checkpulse2() // chương trình encoder của CH
-// {
-//   static int value = 0;
-//   // You have to run getRotation() very frequently in loop to prevent missing rotary encoder signals
-//   // If this is not possible take a look at the pinChangeInterrupt examples
-//   switch (g_rotaryEncoder.getRotation())
-//   {
-//   case KY040::CLOCKWISE:
-//     encoderPos++;
-
-//     if (encoderPos >= DISPLAY_SCREEN_COUNT) //(>4)
-//       encoderPos = 0;
-//     flag_encoderPos = encoderPos;
-//     Serial.print("Direction: ");
-//     Serial.print(currentDir);
-//     Serial.print(" | Counter: ");
-//     Serial.println(encoderPos);
-//     Serial.print(" | Channel: ");
-//     Serial.println(flag_encoderPos);
-//     // ui32_timeout_mqtt=millis()+5000;
-//     timeout_readpzem = millis() + 2000;
-//     break;
-//   case KY040::COUNTERCLOCKWISE:
-//     encoderPos--;
-//     if (encoderPos < 0)
-//       encoderPos = DISPLAY_SCREEN_COUNT - 1; // 4
-//     flag_encoderPos = encoderPos;
-
-//     Serial.print("Direction: ");
-//     Serial.print(currentDir);
-//     Serial.print(" | Counter: ");
-//     Serial.println(encoderPos);
-//     Serial.print(" | Channel: ");
-//     Serial.println(flag_encoderPos);
-//     // ui32_timeout_mqtt=millis()+5000;
-//     timeout_readpzem = millis() + 2000;
-//     break;
-//   }
-// }
-
 void checkpulse2() // chương trình encoder: VIEW + MENU + NET (dùng ClickEncoder)
 {
   // rawAccum: cộng dồn step thô của ClickEncoder
@@ -372,13 +332,13 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET (dùng ClickEnc
         encoderPos = DISPLAY_SCREEN_COUNT - 1;
     }
 
-    flag_encoderPos = encoderPos;
-    Serial.print("Direction: ");
-    Serial.print(currentDir);
-    Serial.print(" | Counter: ");
-    Serial.println(encoderPos);
-    Serial.print(" | Channel: ");
-    Serial.println(flag_encoderPos);
+    flag_encoderPos = encoderPos; // Đồng bộ biến dùng để hiển thị
+    // Serial.print("Direction: ");
+    // Serial.print(currentDir);
+    // Serial.print(" | Counter: ");
+    // Serial.println(encoderPos);
+    // Serial.print(" | Channel: ");
+    // Serial.println(flag_encoderPos);
 
     timeout_readpzem = millis() + 2000;
     return;
@@ -454,7 +414,7 @@ inline void lcdv2_begin()
 inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
 {
 
-  // Ở VIEW: dùng logic cũ, mượt, CH
+  // // Ở VIEW: dùng logic cũ, mượt, CH
   checkpulse2();
 
   // ---- XỬ LÝ NÚT NHẤN ----
@@ -498,6 +458,8 @@ inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
   }
 }
 
+extern unsigned long lastSensorPollMs;
+
 // Hàm đọc nút nhấn để vào/ra menu
 inline void lcdv2_handle_button()
 {
@@ -511,6 +473,8 @@ inline void lcdv2_handle_button()
   // --- PHÁT HIỆN BẮT ĐẦU NHẤN (cạnh xuống) ---
   if (btnState == LOW && lastBtnState == HIGH)
   {
+    lastTelemetryMs = millis();
+    lastSensorPollMs = millis();
     pressStartMs = now;
     longPressHandled = false; // chuẩn bị cho 1 lần bấm mới
   }
@@ -519,6 +483,7 @@ inline void lcdv2_handle_button()
   if (btnState == LOW && !longPressHandled &&
       (now - pressStartMs >= BUTTON_LONG_PRESS_MS))
   {
+    lastSensorPollMs = millis();
     // Chỉ thoát menu nếu đang KHÔNG ở VIEW
     if (uiMode != UI_MODE_VIEW)
     {
@@ -542,11 +507,11 @@ inline void lcdv2_handle_button()
   // --- PHÁT HIỆN NHẢ NÚT (cạnh lên) ---
   if (btnState == HIGH && lastBtnState == LOW)
   {
+    lastSensorPollMs = millis();
     // Nếu long-press đã xử lý rồi → KHÔNG làm short-press nữa
     if (!longPressHandled && (now - pressStartMs > BUTTON_DEBOUNCE_MS))
     {
       // ====== XỬ LÝ NHẤN NGẮN ======
-
       // TỪ VIEW → MENU
       if (uiMode == UI_MODE_VIEW)
       {
@@ -632,7 +597,7 @@ inline void lcdv2_handle_button()
         }
       }
 
-      //RẤT QUAN TRỌNG: đánh dấu đã xử lý xong nhấn ngắn cho lần bấm này
+      // RẤT QUAN TRỌNG: đánh dấu đã xử lý xong nhấn ngắn cho lần bấm này
       longPressHandled = true;
     }
   }
@@ -710,10 +675,11 @@ inline void lcdv2_show_net_menu()
     break;
 
   case 4: // MQTT port
-  default:
     lcdv2_print_line(0, "MQTT VIEW");
     snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
     lcdv2_print_line(1, buffer);
+    break;
+  default:
     break;
   }
 }
@@ -793,19 +759,16 @@ inline void lcdv2_show_net_ip_config()
     lcdv2_print_line(1, buffer);
     break;
   case 4:
-  default:
-  {
     lcdv2_print_line(0, "MQTT CONFIG");
     snprintf(buffer, sizeof(buffer), "Port:%d", mqtt_port);
     lcdv2_print_line(1, buffer);
     break;
   }
-  }
 
   // --- ĐANG EDIT TỪNG CHỮ SỐ ---
   if (netEditing)
   {
-    const char *titles[] = {"SUA IP", "SUA GW", "SUA SUB", "SUA DNS", "MQTT"};
+    const char *titles[] = {"CONFIG IP", "CONFIG GW", "CONFIG SUB", "CONFIG DNS", "MQTT"};
     lcdv2_print_line(0, titles[netFieldIndex]);
     lcdv2_print_line(1, netEditString);
 
@@ -935,7 +898,7 @@ inline void lcdv2_finish_net_edit()
                              netEditBuffer[2], netEditBuffer[3]);
 
   // áp dụng lại cấu hình Ethernet thực tế
-  // apply_network_settings();
+  apply_network_settings();
 
   netEditing = false;
   netConfirming = false;
