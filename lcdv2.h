@@ -85,7 +85,8 @@ const int NET_MENU_ITEMS = 5; // IP, Gateway, Subnet, DNS, MQTT
 int lastNetCfgIndex = -1;
 
 const unsigned long BUTTON_DEBOUNCE_MS = 20;
-const unsigned long BUTTON_LONG_PRESS_MS = 2000; // 2 giây nhấn giữ để thoát menu
+const unsigned long BUTTON_LONG_PRESS_MS = 2000;  // 2 giây nhấn giữ để thoát menu
+const unsigned long NET_CONFIG_TIMEOUT_MS = 5000; // 1 phút không thao tác sẽ thoát 60000UL
 
 bool netEditing = false;
 uint8_t netEditDigitIndex = 0;
@@ -94,6 +95,7 @@ char netEditString[16] = {0};
 IPAddress *netEditTarget = nullptr;
 bool netConfirming = false;      // đang ở màn hình OK / EXIT
 uint8_t netConfirmSelection = 0; // 0 = OK, 1 = EXIT
+unsigned long netConfigLastInteractionMs = 0;
 
 void lcdv2_handle_button();
 void lcdv2_show_main_menu();
@@ -106,6 +108,9 @@ IPAddress *lcdv2_get_selected_address();
 void lcdv2_start_edit_net_field();
 void lcdv2_commit_net_octet();
 void lcdv2_finish_net_edit();
+void lcdv2_reset_net_state();
+void lcdv2_mark_net_interaction();
+void lcdv2_handle_net_timeout();
 //---------------------------
 typedef struct
 {
@@ -273,6 +278,8 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET (dùng ClickEnc
     return; // xoay ít quá, chưa đủ 4 step → bỏ qua
   }
 
+  lcdv2_mark_net_interaction();
+
   // ===== ĐANG CHỈNH TỪNG CHỮ SỐ ĐỊA CHỈ MẠNG =====
   if (netEditing)
   {
@@ -433,6 +440,7 @@ inline void lcdv2_tick_display() // hiển thị theo kênh do encoder chọn
   {
     lcdv2_show_net_ip_config();
   }
+  lcdv2_handle_net_timeout();
 }
 
 // inline void lcdv2_tick_standalone() // đọc ch[0..4] mỗi 500ms
@@ -466,6 +474,8 @@ inline void lcdv2_handle_button()
     lastSensorPollMs = millis();
     pressStartMs = now;
     longPressHandled = false; // chuẩn bị cho 1 lần bấm mới
+
+    lcdv2_mark_net_interaction();
   }
 
   // --- XỬ LÝ NHẤN GIỮ LÂU (>= 2s) ---
@@ -480,12 +490,14 @@ inline void lcdv2_handle_button()
       uiMode = UI_MODE_VIEW;
 
       // Reset các trạng thái edit/confirm của NET CONFIG
-      netEditing = false;
-      netConfirming = false;
-      netConfirmSelection = 0;
-      netEditTarget = nullptr;
-      netEditDigitIndex = 0;
-      lastNetCfgIndex = -1;
+      // netEditing = false;
+      // netConfirming = false;
+      // netConfirmSelection = 0;
+      // netEditTarget = nullptr;
+      // netEditDigitIndex = 0;
+      // lastNetCfgIndex = -1;
+
+      lcdv2_reset_net_state();
 
       // lcd.clear();
       lcdv2_show_hint("BACK TO VIEW", "Turn to view CH");
@@ -508,6 +520,8 @@ inline void lcdv2_handle_button()
         uiMode = UI_MODE_MENU;
         menuIndex = 0;
         // lcd.clear();
+        netConfigLastInteractionMs = millis();
+
         lcdv2_show_hint("MENU", "Turn to select");
       }
 
@@ -525,6 +539,7 @@ inline void lcdv2_handle_button()
         case 1: // NET_MENU (VIEW thông số mạng)
           uiMode = UI_MODE_NET_MENU;
           netFieldIndex = 0;
+          netConfigLastInteractionMs = millis();
           // lcd.clear();
           lcdv2_show_hint("NET VIEW", "Turn to change");
           break;
@@ -532,6 +547,7 @@ inline void lcdv2_handle_button()
         case 2: // NET CONFIG (chỉnh IP tĩnh)
           uiMode = UI_MODE_NET_IP_CONFIG;
           netFieldIndex = 0;
+          netConfigLastInteractionMs = millis();
           // lcd.clear();
           lcdv2_show_hint("NET CONFIG", "Press to edit IP");
           break;
@@ -549,6 +565,7 @@ inline void lcdv2_handle_button()
       {
         // Nhấn ngắn: quay lại MENU
         uiMode = UI_MODE_MENU;
+        netConfigLastInteractionMs = millis();
         // lcd.clear();
         lcdv2_show_hint("MENU", "Turn to select");
       }
@@ -574,10 +591,11 @@ inline void lcdv2_handle_button()
           else
           {
             // EXIT: bỏ thay đổi, THOÁT về MENU
-            netConfirming = false;
-            netEditTarget = nullptr;
-            lastNetCfgIndex = -1;
-            netEditDigitIndex = 0;
+            // netConfirming = false;
+            // netEditTarget = nullptr;
+            // lastNetCfgIndex = -1;
+            // netEditDigitIndex = 0;
+            lcdv2_reset_net_state();
 
             uiMode = UI_MODE_MENU;
             // lcd.clear();
@@ -948,4 +966,36 @@ inline void lcdv2_commit_net_octet()
 
   // còn digit → đưa con trỏ tới đó
   lcd.setCursor(netEditDigitIndex, 1);
+}
+
+inline void lcdv2_reset_net_state()
+{
+  netEditing = false;
+  netConfirming = false;
+  netConfirmSelection = 0;
+  netEditTarget = nullptr;
+  netEditDigitIndex = 0;
+  lastNetCfgIndex = -1;
+  lcd.noCursor();
+}
+
+inline void lcdv2_mark_net_interaction()
+{
+  if (uiMode == UI_MODE_NET_MENU || uiMode == UI_MODE_NET_IP_CONFIG)
+  {
+    netConfigLastInteractionMs = millis();
+  }
+}
+
+inline void lcdv2_handle_net_timeout()
+{
+  if (uiMode == UI_MODE_NET_MENU || uiMode == UI_MODE_NET_IP_CONFIG)
+  {
+    if (netConfigLastInteractionMs > 0 && millis() - netConfigLastInteractionMs >= NET_CONFIG_TIMEOUT_MS)
+    {
+      uiMode = UI_MODE_VIEW;
+      lcdv2_reset_net_state();
+      lcdv2_show_hint("NET TIMEOUT", "Back to view");
+    }
+  }
 }

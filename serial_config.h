@@ -8,10 +8,14 @@ extern IPAddress ip;
 extern IPAddress dns;
 extern IPAddress gateway;
 extern IPAddress subnet;
+extern bool telemetryDirty;
+extern uint8_t nextPublishChannel;
 
 // Hàm apply_network_settings() đã tồn tại trong POWER_ETHERNET_V2.ino
 // và chịu trách nhiệm khởi tạo lại Ethernet + MQTT với cấu hình mới.
 void apply_network_settings();
+// Lưu cấu hình mạng hiện tại xuống EEPROM
+void persistNetworkConfig();
 
 inline void serialPrintNetworkState()
 {
@@ -85,7 +89,10 @@ inline bool serialHandleSetCommand(const String &field, const String &value)
 
   if (changed)
   {
+    persistNetworkConfig();
     apply_network_settings();
+    telemetryDirty = true;
+    nextPublishChannel = 0;
     serialPrintNetworkState();
   }
 
