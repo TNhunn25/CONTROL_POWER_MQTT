@@ -86,7 +86,7 @@ int lastNetCfgIndex = -1;
 
 const unsigned long BUTTON_DEBOUNCE_MS = 20;
 const unsigned long BUTTON_LONG_PRESS_MS = 2000;  // 2 giây nhấn giữ để thoát menu
-const unsigned long NET_CONFIG_TIMEOUT_MS = 5000; // 1 phút không thao tác sẽ thoát 60000UL
+const unsigned long NET_CONFIG_TIMEOUT_MS = 60000; // 1 phút không thao tác sẽ thoát 60000UL
 
 bool netEditing = false;
 uint8_t netEditDigitIndex = 0;
@@ -109,7 +109,7 @@ void lcdv2_start_edit_net_field();
 void lcdv2_commit_net_octet();
 void lcdv2_finish_net_edit();
 void lcdv2_reset_net_state();
-void lcdv2_mark_net_interaction();
+void lcdv2_timeout();
 void lcdv2_handle_net_timeout();
 //---------------------------
 typedef struct
@@ -278,7 +278,7 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET (dùng ClickEnc
     return; // xoay ít quá, chưa đủ 4 step → bỏ qua
   }
 
-  lcdv2_mark_net_interaction();
+  lcdv2_timeout();
 
   // ===== ĐANG CHỈNH TỪNG CHỮ SỐ ĐỊA CHỈ MẠNG =====
   if (netEditing)
@@ -343,6 +343,7 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET (dùng ClickEnc
   // ===== MENU MODE: xoay để đổi lựa chọn menu chính =====
   if (uiMode == UI_MODE_MENU)
   {
+    lcdv2_timeout();
     menuIndex += step;
 
     if (menuIndex >= MAIN_MENU_ITEMS)
@@ -350,6 +351,7 @@ void checkpulse2() // chương trình encoder: VIEW + MENU + NET (dùng ClickEnc
     else if (menuIndex < 0)
       menuIndex = MAIN_MENU_ITEMS - 1;
 
+    last_channel = -1; // buộc vẽ lại menu khi quay từ VIEW sang MENU
     return;
   }
 
@@ -475,7 +477,7 @@ inline void lcdv2_handle_button()
     pressStartMs = now;
     longPressHandled = false; // chuẩn bị cho 1 lần bấm mới
 
-    lcdv2_mark_net_interaction();
+    lcdv2_timeout();
   }
 
   // --- XỬ LÝ NHẤN GIỮ LÂU (>= 2s) ---
@@ -520,6 +522,7 @@ inline void lcdv2_handle_button()
         uiMode = UI_MODE_MENU;
         menuIndex = 0;
         // lcd.clear();
+        netConfigLastInteractionMs = millis();
         lcdv2_show_hint("MENU", "Turn to select");
       }
 
@@ -531,6 +534,7 @@ inline void lcdv2_handle_button()
         case 0: // VIEW
           uiMode = UI_MODE_VIEW;
           // lcd.clear();
+          netConfigLastInteractionMs = 0;
           lcdv2_show_hint("VIEW MODE", "Turn to change");
           break;
 
@@ -553,6 +557,7 @@ inline void lcdv2_handle_button()
         case 3: // EXIT về VIEW
           uiMode = UI_MODE_VIEW;
           // lcd.clear();
+          netConfigLastInteractionMs = 0;
           lcdv2_show_hint("EXIT MENU", "Turn to view CH");
           break;
         }
@@ -610,6 +615,7 @@ inline void lcdv2_handle_button()
           // mục MQTT hoặc mục cuối → thoát về MENU
           uiMode = UI_MODE_MENU;
           // lcd.clear();
+          netConfigLastInteractionMs = millis();
           lcdv2_show_hint("MENU", "Turn to select");
         }
       }
@@ -976,9 +982,9 @@ inline void lcdv2_reset_net_state()
   lcd.noCursor();
 }
 
-inline void lcdv2_mark_net_interaction()
+inline void lcdv2_timeout()
 {
-  if (uiMode == UI_MODE_NET_MENU || uiMode == UI_MODE_NET_IP_CONFIG)
+  if (uiMode == UI_MODE_MENU || uiMode == UI_MODE_NET_MENU || uiMode == UI_MODE_NET_IP_CONFIG)
   {
     netConfigLastInteractionMs = millis();
   }
@@ -986,13 +992,15 @@ inline void lcdv2_mark_net_interaction()
 
 inline void lcdv2_handle_net_timeout()
 {
-  if (uiMode == UI_MODE_NET_MENU || uiMode == UI_MODE_NET_IP_CONFIG)
+  if (uiMode == UI_MODE_MENU || uiMode == UI_MODE_NET_MENU || uiMode == UI_MODE_NET_IP_CONFIG)
   {
     if (netConfigLastInteractionMs > 0 && millis() - netConfigLastInteractionMs >= NET_CONFIG_TIMEOUT_MS)
     {
+      const bool menuTimeout = uiMode == UI_MODE_MENU;
       uiMode = UI_MODE_VIEW;
+      netConfigLastInteractionMs = 0;
       lcdv2_reset_net_state();
-      lcdv2_show_hint("NET TIMEOUT", "Back to view");
+      lcdv2_show_hint(menuTimeout ? "MENU TIMEOUT" : "NET TIMEOUT", "back to view");
     }
   }
 }
