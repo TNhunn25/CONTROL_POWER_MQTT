@@ -520,8 +520,6 @@ inline void lcdv2_handle_button()
         uiMode = UI_MODE_MENU;
         menuIndex = 0;
         // lcd.clear();
-        netConfigLastInteractionMs = millis();
-
         lcdv2_show_hint("MENU", "Turn to select");
       }
 
@@ -861,7 +859,6 @@ inline IPAddress *lcdv2_get_selected_address()
     return nullptr;
   }
 }
-
 inline void lcdv2_start_edit_net_field()
 {
   IPAddress *target = lcdv2_get_selected_address();
