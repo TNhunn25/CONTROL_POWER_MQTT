@@ -26,4 +26,10 @@
 - Relay điều khiển: các chân {5,6,8,11,...} với phản hồi {3,7,10,12,...}; firmware dùng 4 kênh đầu (RELAY_COUNT=4) để publish và điều khiển.
 - Cảm biến PZEM-004T v2 trên Serial3 qua HC4052 (S0=27, S1=28); kênh tổng dùng Serial2. LED báo MAN tại chân 13; công tắc Auto=30, Man=31. Encoder: CLK=47, DT=48, SW=49. LCD I2C địa chỉ 0x27.
 
+/////////////////////////
+04/12/2025 
+- Update sau:
++ Mất kết nối cổng Lan (Ethernet) - Bộ điều khiển của Trí đã hiển thị mất kết nối. Màn hình LCD chưa hiển thị (NET VIEW sẽ xử lý phần này).
++ Địa chỉ mặc định: chuỗi 000.000.000
+
 
